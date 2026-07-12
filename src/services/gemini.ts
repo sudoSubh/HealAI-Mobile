@@ -68,7 +68,7 @@ export async function callGemini(
 
       const parts: any[] = [];
       if (imageBase64 && typeof imageBase64 === 'string') {
-        const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+        const cleanBase64 = imageBase64.replace(/^data:[a-zA-Z0-9-+\/]+;base64,/, '');
         parts.push({ inlineData: { data: cleanBase64, mimeType } });
       }
       parts.push({ text: prompt });

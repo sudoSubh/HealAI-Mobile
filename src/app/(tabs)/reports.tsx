@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, ScrollView, StyleSheet, useColorScheme, TouchableOpacity, Alert,
+  View, ScrollView, StyleSheet, useColorScheme, TouchableOpacity, Alert, Platform,
 } from 'react-native';
 import {
   Text, Surface, Button, Card, TextInput, Chip, ActivityIndicator, SegmentedButtons, Divider, useTheme,
@@ -8,12 +8,14 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { Colors } from '../../theme';
 import { callGemini } from '../../services/gemini';
 import { UserProfile, EMPTY_PROFILE, ReportFile } from '../../types';
 import { useTranslation } from '../../localization';
+import Markdown from 'react-native-markdown-display';
 
 const TABS = [
   { value: 'profile', label: 'Profile', icon: 'account' },
@@ -52,6 +54,7 @@ export default function ReportsScreen() {
   const [advice, setAdvice] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [tempInput, setTempInput] = useState('');
+  const [extracting, setExtracting] = useState(false);
 
   useEffect(() => {
     loadProfile();
@@ -94,12 +97,164 @@ export default function ReportsScreen() {
     await AsyncStorage.setItem('userProfile', JSON.stringify(draft));
   };
 
-  const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      base64: true,
-      quality: 0.7,
-    });
+  const showAlert = (title: string, message: string) => {
+    if (Platform.OS === 'web') {
+      alert(title + ': ' + message);
+    } else {
+      Alert.alert(title, message);
+    }
+  };
+
+  const pickPrescription = async (useCamera: boolean) => {
+    try {
+      let status = '';
+      if (useCamera) {
+        if (Platform.OS === 'web') {
+          status = 'granted';
+        } else {
+          const res = await ImagePicker.requestCameraPermissionsAsync();
+          status = res.status;
+        }
+      } else {
+        if (Platform.OS === 'web') {
+          status = 'granted';
+        } else {
+          const res = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          status = res.status;
+        }
+      }
+
+      if (status !== 'granted') {
+        showAlert('Permission Denied', 'Permission is required to scan the prescription.');
+        return;
+      }
+
+      const result = useCamera
+        ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], base64: true, quality: 0.7 })
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], base64: true, quality: 0.7 });
+
+      if (!result.canceled && result.assets[0]?.base64) {
+        const asset = result.assets[0];
+        extractProfileFromPrescription(asset.base64!, 'image/jpeg');
+      }
+    } catch (e) {
+      console.error(e);
+      showAlert('Error', 'Failed to acquire image.');
+    }
+  };
+
+  const extractProfileFromPrescription = async (base64: string, mimeType: string) => {
+    setExtracting(true);
+    const prompt = 'You are a medical AI assistant. Analyze this prescription or medical report and extract the patient\'s health profile details.\n' +
+      'Return ONLY a valid JSON object matching the following structure (no extra formatting or markdown):\n' +
+      '{\n' +
+      '  "name": "extracted patient name or empty string if not found",\n' +
+      '  "age": "extracted age as string or empty string",\n' +
+      '  "gender": "male" or "female" or "other",\n' +
+      '  "height": "extracted height in cm or empty string",\n' +
+      '  "weight": "extracted weight in kg or empty string",\n' +
+      '  "bloodGroup": "extracted blood group like A+, O- etc or empty string",\n' +
+      '  "medicalConditions": ["list", "of", "conditions", "suspected", "or", "diagnosed"],\n' +
+      '  "allergies": ["list", "of", "allergies", "mentioned"],\n' +
+      '  "medications": ["list", "of", "active", "prescribed", "medicines", "with", "dosage"]\n' +
+      '}\n' +
+      'If a field is not found or not mentioned, return empty string or empty array. Be accurate and do not make up information.';
+
+    try {
+      const raw = await callGemini(prompt, base64, mimeType, 'report-analyzer');
+      const clean = raw.replace(/```json\n?/g, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(clean);
+      
+      setDraft({
+        name: parsed.name || '',
+        age: String(parsed.age || ''),
+        gender: (parsed.gender === 'male' || parsed.gender === 'female' || parsed.gender === 'other') ? parsed.gender : 'other',
+        height: String(parsed.height || ''),
+        weight: String(parsed.weight || ''),
+        bloodGroup: parsed.bloodGroup || '',
+        medicalConditions: Array.isArray(parsed.medicalConditions) ? parsed.medicalConditions : [],
+        allergies: Array.isArray(parsed.allergies) ? parsed.allergies : [],
+        medications: Array.isArray(parsed.medications) ? parsed.medications : [],
+      });
+      setEditing(true);
+      showAlert('Extraction Success', 'Successfully extracted profile details. Review them below, modify if needed, then tap Save.');
+    } catch (e) {
+      console.error('Extraction error:', e);
+      showAlert('Extraction Failed', 'Failed to extract profile details. Please fill out manually.');
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  const pickFromCamera = async () => {
+    try {
+      let status = '';
+      if (Platform.OS === 'web') {
+        status = 'granted';
+      } else {
+        const res = await ImagePicker.requestCameraPermissionsAsync();
+        status = res.status;
+      }
+
+      if (status !== 'granted') {
+        showAlert('Permission Denied', 'Camera permissions are required to capture reports.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        base64: true,
+        quality: 0.7,
+      });
+      handleImagePickerResult(result);
+    } catch (e) {
+      console.error(e);
+      showAlert('Error', 'Failed to scan report.');
+    }
+  };
+
+  const pickFromDocuments = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['image/*', 'application/pdf'],
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        
+        // Convert local URI to base64 string
+        const response = await fetch(asset.uri);
+        const blob = await response.blob();
+        const base64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const dataUrl = reader.result as string;
+            const base64Content = dataUrl.split(',')[1];
+            resolve(base64Content);
+          };
+          reader.readAsDataURL(blob);
+        });
+
+        const newFile: ReportFile = {
+          id: Date.now().toString(),
+          name: asset.name || `document_${Date.now()}.pdf`,
+          size: asset.size || 0,
+          base64: base64,
+          mimeType: asset.mimeType || (asset.name.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
+          uploadedAt: new Date().toISOString(),
+          status: 'uploaded',
+        };
+        const updated = [...reports, newFile];
+        setReports(updated);
+        await AsyncStorage.setItem('medicalReports', JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.error(e);
+      showAlert('Error', 'Failed to upload document.');
+    }
+  };
+
+  const handleImagePickerResult = async (result: ImagePicker.ImagePickerResult) => {
     if (!result.canceled && result.assets[0]?.base64) {
       const asset = result.assets[0];
       const newFile: ReportFile = {
@@ -268,7 +423,11 @@ CRITICAL REQUIREMENT: You MUST translate the recommendation title and descriptio
                 <View style={styles.cardHeaderRow}>
                   <Text style={[styles.cardTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{t('healthProfile')}</Text>
                   {!editing ? (
-                    <Button mode="text" onPress={() => { setDraft(profile); setEditing(true); }} compact labelStyle={{ fontSize: 12 }}>Edit</Button>
+                    <View style={{ flexDirection: 'row', gap: 2, alignItems: 'center' }}>
+                      <Button mode="text" onPress={() => { setDraft(profile); setEditing(true); }} compact labelStyle={{ fontSize: 10, fontWeight: '700', color: Colors.teal[700] }}>Edit</Button>
+                      <Button mode="text" onPress={() => pickPrescription(true)} compact labelStyle={{ fontSize: 10, fontWeight: '700', color: Colors.teal[700] }} icon="camera">Scan</Button>
+                      <Button mode="text" onPress={() => pickPrescription(false)} compact labelStyle={{ fontSize: 10, fontWeight: '700', color: Colors.teal[700] }} icon="image">Upload</Button>
+                    </View>
                   ) : (
                     <View style={{ flexDirection: 'row', gap: 8 }}>
                       <Button mode="text" onPress={() => setEditing(false)} compact labelStyle={{ fontSize: 12, color: Colors.slate[500] }}>Cancel</Button>
@@ -276,6 +435,12 @@ CRITICAL REQUIREMENT: You MUST translate the recommendation title and descriptio
                     </View>
                   )}
                 </View>
+                {extracting && (
+                  <View style={{ alignItems: 'center', paddingVertical: 20, gap: 10 }}>
+                    <ActivityIndicator size="small" color={Colors.teal[600]} />
+                    <Text style={{ fontSize: 12, color: Colors.teal[600], fontWeight: '600', textAlign: 'center' }}>AI is extracting health profile details from image...</Text>
+                  </View>
+                )}
                 {editing ? (
                   <View style={{ gap: 10, marginTop: 12 }}>
                     {[
@@ -349,8 +514,27 @@ CRITICAL REQUIREMENT: You MUST translate the recommendation title and descriptio
                           ))}
                         </View>
                         {profile.medicalConditions.length > 0 && (
-                          <View style={styles.chipsWrap}>
-                            {profile.medicalConditions.map((c, i) => <Chip key={i} compact style={{ backgroundColor: Colors.rose[50] }} textStyle={{ color: Colors.rose[700], fontSize: 10 }}>{c}</Chip>)}
+                          <View style={{ marginTop: 10 }}>
+                            <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? Colors.slate[500] : Colors.slate[400], marginBottom: 4 }}>Medical Conditions</Text>
+                            <View style={styles.chipsWrap}>
+                              {profile.medicalConditions.map((c, i) => <Chip key={i} compact style={{ backgroundColor: Colors.rose[50] }} textStyle={{ color: Colors.rose[700], fontSize: 10 }}>{c}</Chip>)}
+                            </View>
+                          </View>
+                        )}
+                        {profile.allergies.length > 0 && (
+                          <View style={{ marginTop: 10 }}>
+                            <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? Colors.slate[500] : Colors.slate[400], marginBottom: 4 }}>Allergies</Text>
+                            <View style={styles.chipsWrap}>
+                              {profile.allergies.map((c, i) => <Chip key={i} compact style={{ backgroundColor: Colors.amber[50] }} textStyle={{ color: Colors.amber[700], fontSize: 10 }}>{c}</Chip>)}
+                            </View>
+                          </View>
+                        )}
+                        {profile.medications.length > 0 && (
+                          <View style={{ marginTop: 10 }}>
+                            <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? Colors.slate[500] : Colors.slate[400], marginBottom: 4 }}>Medications</Text>
+                            <View style={styles.chipsWrap}>
+                              {profile.medications.map((c, i) => <Chip key={i} compact style={{ backgroundColor: Colors.blue[50] }} textStyle={{ color: Colors.blue[700], fontSize: 10 }}>{c}</Chip>)}
+                            </View>
                           </View>
                         )}
                       </>
@@ -365,9 +549,14 @@ CRITICAL REQUIREMENT: You MUST translate the recommendation title and descriptio
         {/* Reports Tab */}
         {activeTab === 'reports' && (
           <Animated.View entering={FadeInDown.duration(400)}>
-            <Button mode="contained" onPress={pickImage} icon="camera-plus" style={{ borderRadius: 16, backgroundColor: Colors.blue[600], marginBottom: 16 }}>
-              Upload Medical Report
-            </Button>
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+              <Button mode="contained" onPress={pickFromCamera} icon="camera" style={{ flex: 1, borderRadius: 16, backgroundColor: Colors.blue[600] }} labelStyle={{ fontSize: 12 }}>
+                Scan Report
+              </Button>
+              <Button mode="contained" onPress={pickFromDocuments} icon="file-upload" style={{ flex: 1, borderRadius: 16, backgroundColor: Colors.blue[600] }} labelStyle={{ fontSize: 12 }}>
+                Upload File
+              </Button>
+            </View>
             {reports.length === 0 && (
               <View style={{ alignItems: 'center', paddingVertical: 40 }}>
                 <MaterialCommunityIcons name="file-image-plus" size={48} color={isDark ? Colors.slate[700] : Colors.slate[300]} />
@@ -381,8 +570,12 @@ CRITICAL REQUIREMENT: You MUST translate the recommendation title and descriptio
                 <Card.Content>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                      <View style={[styles.fileIcon, { backgroundColor: isDark ? '#1e3a8a50' : Colors.blue[50] }]}>
-                        <MaterialCommunityIcons name="file-image" size={18} color={Colors.blue[600]} />
+                      <View style={[styles.fileIcon, { backgroundColor: isDark ? (file.mimeType === 'application/pdf' ? '#991b1b20' : '#1e3a8a50') : (file.mimeType === 'application/pdf' ? Colors.rose[50] : Colors.blue[50]) }]}>
+                        <MaterialCommunityIcons 
+                          name={file.mimeType === 'application/pdf' ? 'file-pdf-box' : 'file-image'} 
+                          size={18} 
+                          color={file.mimeType === 'application/pdf' ? Colors.rose[600] : Colors.blue[600]} 
+                        />
                       </View>
                       <View style={{ flex: 1 }}>
                         <Text style={{ fontSize: 13, fontWeight: '600', color: isDark ? '#fff' : Colors.slate[700] }} numberOfLines={1}>{file.name}</Text>
@@ -407,8 +600,19 @@ CRITICAL REQUIREMENT: You MUST translate the recommendation title and descriptio
                   </View>
                   {file.analysisResult && (
                     <View style={[styles.analysisBox, { backgroundColor: isDark ? '#18181b' : '#f8fafc' }]}>
-                      <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? Colors.slate[400] : Colors.slate[500], marginBottom: 4 }}>AI ANALYSIS</Text>
-                      <Text style={{ fontSize: 12, lineHeight: 18, color: isDark ? Colors.slate[300] : Colors.slate[600] }}>{file.analysisResult}</Text>
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? Colors.slate[400] : Colors.slate[500], marginBottom: 6 }}>AI ANALYSIS</Text>
+                      <Markdown style={{
+                        body: { color: isDark ? Colors.slate[300] : Colors.slate[700], fontSize: 12, lineHeight: 18 },
+                        bullet_list: { marginVertical: 4 },
+                        bullet_list_icon: { color: Colors.teal[600], marginRight: 6 },
+                        strong: { fontWeight: 'bold', color: isDark ? '#fff' : Colors.slate[900] },
+                        heading1: { fontSize: 15, fontWeight: 'bold', marginTop: 8, marginBottom: 4, color: isDark ? '#fff' : Colors.slate[900] },
+                        heading2: { fontSize: 13, fontWeight: 'bold', marginTop: 8, marginBottom: 4, color: isDark ? '#fff' : Colors.slate[900] },
+                        heading3: { fontSize: 11, fontWeight: 'bold', marginTop: 6, marginBottom: 2, color: isDark ? '#fff' : Colors.slate[900] },
+                        paragraph: { marginVertical: 4 },
+                      }}>
+                        {file.analysisResult}
+                      </Markdown>
                     </View>
                   )}
                 </Card.Content>
