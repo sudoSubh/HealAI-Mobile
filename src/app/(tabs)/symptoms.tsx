@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import {
-  View, ScrollView, StyleSheet, useColorScheme, TouchableOpacity, Alert, Share, Image,
+  View, ScrollView, StyleSheet, useColorScheme, TouchableOpacity, Alert, Share, Image, Platform,
 } from 'react-native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import {
   Text, Surface, Button, TextInput, Chip, ProgressBar, Card, Divider, ActivityIndicator, useTheme,
 } from 'react-native-paper';
@@ -214,13 +216,147 @@ ${result.conditions.map(c => `- ${c.condition} (${c.probability} Probability): $
 
 REMEDY RECOMMENDATIONS:
 ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).join('\n')}
-
-DISCLAIMER:
-${result.disclaimer}
 `;
+
     try {
       await Share.share({ message: reportText });
     } catch {}
+  };
+
+  const handleDownloadPDF = async () => {
+    if (!result) return;
+
+    const reasoningHtml = (result.urgencyLevel && result.urgencyLevel.reasoning)
+      ? result.urgencyLevel.reasoning.map(r => '<li>' + r + '</li>').join('')
+      : '';
+
+    const conditionsHtml = (result.conditions || []).map(c => {
+      const testsListHtml = (c.suggestedTests || []).map(t => '<li>' + t + '</li>').join('');
+      const testsHtml = testsListHtml
+        ? '<div style="margin-top: 10px; font-size: 12px;"><strong style="color: #0f172a;">Suggested Diagnostic Tests:</strong><ul class="bullet-list" style="margin-top: 4px;">' + testsListHtml + '</ul></div>'
+        : '';
+      return '<div class="card"><div class="card-header"><span>' + c.condition + '</span><span class="probability-badge prob-' + c.probability + '">' + c.probability + ' Probability</span></div><p style="margin: 0; font-size: 13px; color: #475569;">' + c.description + '</p>' + testsHtml + '</div>';
+    }).join('');
+
+    const lifestyleHtml = (result.lifestyleImpact || []).map(li => {
+      const recsHtml = (li.recommendations || []).map(rec => '<li>' + rec + '</li>').join('');
+      return '<div class="card" style="background-color: #f0fdfa; border-color: #ccfbf1;"><div style="font-weight: bold; color: #0f766e; margin-bottom: 4px;">' + li.factor + '</div><p style="margin: 0 0 8px 0; font-size: 13px;">' + li.impact + '</p><strong style="font-size: 12px; color: #0f172a;">Recommendations:</strong><ul class="bullet-list" style="margin-top: 4px;">' + recsHtml + '</ul></div>';
+    }).join('');
+
+    const remediesHtml = (result.remedyRecommendations || []).map(rem => {
+      const warningHtml = rem.warning
+        ? '<div style="font-size: 11px; color: #b45309; font-weight: 500;">⚠️ Note: ' + rem.warning + '</div>'
+        : '';
+      return '<div class="remedy-card"><div class="remedy-type">' + rem.type + '</div><p style="margin: 0 0 6px 0; font-size: 13px;">' + rem.recommendation + '</p>' + warningHtml + '</div>';
+    }).join('');
+
+    const redFlagsHtml = (result.redFlags || []).map(rf => '<li>' + rf + '</li>').join('');
+
+    const historyHtml = conditions.length > 0
+      ? '<div class="meta-item" style="grid-column: span 2;"><strong>Medical History Conditions:</strong> ' + conditions.join(', ') + '</div>'
+      : '';
+
+    const medicationsHtml = medications.length > 0
+      ? '<div class="meta-item" style="grid-column: span 2;"><strong>Active Medications:</strong> ' + medications.join(', ') + '</div>'
+      : '';
+
+    const lifestyleSectionHtml = lifestyleHtml
+      ? '<div class="section-title">Lifestyle Impacts</div>' + lifestyleHtml
+      : '';
+
+    const remediesSectionHtml = remediesHtml
+      ? '<div class="section-title">Ayurvedic & Lifestyle Remedies</div>' + remediesHtml
+      : '';
+
+    const redFlagsSectionHtml = redFlagsHtml
+      ? '<div class="section-title" style="color: #dc2626; border-left-color: #dc2626;">🚨 Emergency warning signs (Red Flags)</div><div class="card" style="background-color: #fef2f2; border-color: #fee2e2;"><ul class="bullet-list" style="color: #991b1b; font-weight: 500;">' + redFlagsHtml + '</ul></div>'
+      : '';
+
+    const htmlContent = '<html>' +
+      '<head>' +
+      '  <meta charset="utf-8">' +
+      '  <title>HealAI - Medical Analysis Report</title>' +
+      '  <style>' +
+      '    body { font-family: Arial, sans-serif; padding: 30px; color: #334155; background-color: #ffffff; }' +
+      '    .header { border-bottom: 2px solid #0d9488; padding-bottom: 20px; margin-bottom: 30px; }' +
+      '    .title { font-size: 26px; font-weight: 800; color: #0f172a; margin: 0; }' +
+      '    .subtitle { font-size: 14px; color: #64748b; margin-top: 4px; }' +
+      '    .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 30px; background-color: #f8fafc; padding: 15px; border-radius: 12px; }' +
+      '    .meta-item strong { color: #0f172a; }' +
+      '    .urgency-badge { display: inline-block; padding: 8px 16px; border-radius: 8px; font-weight: bold; font-size: 16px; margin-bottom: 20px; }' +
+      '    .urgency-Emergency { background-color: #fef2f2; color: #dc2626; border: 1px solid #fee2e2; }' +
+      '    .urgency-Urgent { background-color: #fff7ed; color: #ea580c; border: 1px solid #ffedd5; }' +
+      '    .urgency-Soon { background-color: #fefce8; color: #ca8a04; border: 1px solid #fef9c3; }' +
+      '    .urgency-Routine { background-color: #f0fdf4; color: #16a34a; border: 1px solid #dcfce7; }' +
+      '    .section-title { font-size: 18px; font-weight: 700; color: #0f172a; border-left: 4px solid #0d9488; padding-left: 10px; margin-top: 30px; margin-bottom: 15px; }' +
+      '    .card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 15px; margin-bottom: 12px; background-color: #ffffff; }' +
+      '    .card-header { display: flex; justify-content: space-between; font-weight: bold; margin-bottom: 6px; color: #0f172a; }' +
+      '    .probability-badge { font-size: 11px; padding: 2px 8px; border-radius: 6px; }' +
+      '    .prob-High { background-color: #fef2f2; color: #dc2626; }' +
+      '    .prob-Medium { background-color: #fff7ed; color: #ea580c; }' +
+      '    .prob-Low { background-color: #f0fdf4; color: #16a34a; }' +
+      '    .bullet-list { padding-left: 20px; margin: 8px 0; }' +
+      '    .bullet-list li { margin-bottom: 4px; }' +
+      '    .remedy-card { border: 1px solid #fee2e2; background-color: #fff5f5; padding: 15px; border-radius: 12px; margin-bottom: 12px; }' +
+      '    .remedy-type { font-weight: bold; color: #991b1b; margin-bottom: 4px; }' +
+      '    .footer { margin-top: 50px; border-top: 1px solid #e2e8f0; padding-top: 15px; font-size: 11px; color: #94a3b8; text-align: center; }' +
+      '  </style>' +
+      '</head>' +
+      '<body>' +
+      '  <div class="header">' +
+      '    <h1 class="title">HealAI Clinic Report</h1>' +
+      '    <p class="subtitle">Generated securely inside HealAI app</p>' +
+      '  </div>' +
+      '  <div class="meta-grid">' +
+      '    <div class="meta-item">' +
+      '      <strong>Selected Area:</strong> ' + (selectedBodyPart || 'N/A') +
+      '    </div>' +
+      '    <div class="meta-item">' +
+      '      <strong>Severity & Duration:</strong> ' + severity + ' (' + duration + ')' +
+      '    </div>' +
+      '    <div class="meta-item" style="grid-column: span 2;">' +
+      '      <strong>Symptoms Analyzed:</strong> ' + symptoms.join(', ') +
+      '    </div>' +
+      '    ' + historyHtml +
+      '    ' + medicationsHtml +
+      '  </div>' +
+      '  <div class="urgency-badge urgency-' + result.urgencyLevel.level + '">' +
+      '    Urgency: ' + result.urgencyLevel.level + ' (Timeframe: ' + result.urgencyLevel.timeframe + ')' +
+      '  </div>' +
+      '  <div class="section-title">Reasoning & Guidance</div>' +
+      '  <ul class="bullet-list">' +
+      '    ' + reasoningHtml +
+      '  </ul>' +
+      '  <div class="section-title">Matched Potential Conditions</div>' +
+      '  ' + conditionsHtml +
+      '  ' + lifestyleSectionHtml +
+      '  ' + remediesSectionHtml +
+      '  ' + redFlagsSectionHtml +
+      '  <div class="footer" style="margin-top: 60px; border-top: 1px solid #e2e8f0; padding-top: 20px; text-align: center;">' +
+      '    <div style="font-size: 18px; font-weight: 900; color: #0d9488; margin-bottom: 2px;">Heal<span style="color: #0f172a;">AI</span></div>' +
+      '    <div style="font-size: 9px; color: #64748b; font-weight: 600; letter-spacing: 1px; text-transform: uppercase;">Health Intelligence Report</div>' +
+      '    <div style="font-size: 9px; color: #94a3b8; margin-top: 6px;">© 2026 HealAI. Confidential client reference.</div>' +
+      '  </div>' +
+      '</body>' +
+      '</html>';
+
+    try {
+      if (Platform.OS === 'web') {
+        const { uri } = await Print.printToFileAsync({ html: htmlContent });
+        const link = document.createElement('a');
+        link.href = uri;
+        link.download = 'HealAI_Medical_Report.pdf';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } else {
+        const { uri } = await Print.printToFileAsync({ html: htmlContent });
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Download Medical Report' });
+      }
+    } catch (e) {
+      console.error('Failed to generate PDF:', e);
+      Alert.alert('Export Failed', 'Could not generate or download PDF report.');
+    }
   };
 
   const reset = () => {
@@ -511,7 +647,10 @@ ${result.disclaimer}
             {/* Header actions */}
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <Text style={[styles.stepTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{t('analysisResults')}</Text>
-              <Button mode="outlined" onPress={handleShareReport} icon="share-variant" compact style={{ borderRadius: 16 }}>Share</Button>
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                <Button mode="outlined" onPress={handleDownloadPDF} icon="file-pdf-box" compact style={{ borderRadius: 16 }}>PDF</Button>
+                <Button mode="outlined" onPress={handleShareReport} icon="share-variant" compact style={{ borderRadius: 16 }}>Share</Button>
+              </View>
             </View>
 
             {/* Urgency */}

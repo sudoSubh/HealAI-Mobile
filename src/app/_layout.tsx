@@ -1,8 +1,10 @@
 import { Stack } from 'expo-router';
 import { PaperProvider } from 'react-native-paper';
-import { useColorScheme, StatusBar } from 'react-native';
+import { useColorScheme, StatusBar, LogBox } from 'react-native';
 import { LightTheme, DarkTheme } from '../theme';
 import { LanguageProvider } from '../localization';
+
+LogBox.ignoreAllLogs();
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
