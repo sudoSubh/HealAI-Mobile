@@ -1,0 +1,26 @@
+{
+  "kind": "critique-panel",
+  "score": 4.5,
+  "axes": {
+    "clarity": {
+      "score": 5,
+      "notes": "UI-REDESIGN-PLAYBOOK.md phases A–H, file checklist, AI agent prompt, and do/don't rules are explicit for a complete RN app."
+    },
+    "hierarchy": {
+      "score": 5,
+      "notes": "Foundation → nav → screens order prevents big-bang rewrites; high-impact tab CTA early."
+    },
+    "typography": {
+      "score": 4,
+      "notes": "Type scale and anti-patterns called out; execution deferred to AppText primitive."
+    },
+    "motion": {
+      "score": 4,
+      "notes": "Smoothness recipe + motion.ts + reduced-motion gate included."
+    },
+    "brand": {
+      "score": 4,
+      "notes": "Aligned to DESIGN.md / theme tokens; medical screens protected from gamification chrome."
+    }
+  }
+}

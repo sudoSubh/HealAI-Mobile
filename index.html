@@ -1,0 +1,960 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HealAi — Wireframe Prototype</title>
+  <style>
+    :root {
+      --bg: oklch(98.5% 0.008 280);
+      --surface: oklch(100% 0 0);
+      --surface-2: oklch(97.5% 0.012 280);
+      --fg: oklch(22% 0.04 285);
+      --muted: oklch(52% 0.02 270);
+      --border: oklch(91% 0.015 280);
+      --accent: #6366f1;
+      --accent-2: #06b6d4;
+      --accent-3: #8b5cf6;
+      --bg-dark: #0a0a14;
+      --surface-dark: #12121e;
+      --surface-2-dark: #1a1a2e;
+      --fg-dark: #e8e8f0;
+      --muted-dark: #8888a0;
+      --border-dark: #2a2a3e;
+      --accent-dark: #818cf8;
+      --esi-1: #dc2626;
+      --esi-2: #ea580c;
+      --esi-3: #f59e0b;
+      --esi-4: #22c55e;
+      --esi-5: #10b981;
+      --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+      --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+      --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+      --radius-sm: 12px;
+      --radius-md: 16px;
+      --radius-lg: 20px;
+      --radius-pill: 9999px;
+      --shadow-cta: 0 8px 20px color-mix(in srgb, #6366f1 35%, transparent);
+      --shadow-tab: 0 -3px 12px rgba(30, 27, 75, 0.06);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    button { font: inherit; border: 0; background: none; cursor: pointer; color: inherit; }
+    body {
+      min-height: 100vh;
+      font-family: var(--font-body);
+      background: var(--bg-dark);
+      color: var(--fg-dark);
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -10%, rgba(99, 102, 241, 0.22), transparent 55%),
+        radial-gradient(ellipse 40% 30% at 80% 100%, rgba(6, 182, 212, 0.08), transparent 50%);
+    }
+
+    .stage {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
+    }
+
+    .stage-caption {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted-dark);
+    }
+    .stage-caption .brand { color: var(--fg-dark); font-weight: 600; }
+
+    .phones {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 28px;
+    }
+
+    /* Phone shell */
+    .phone {
+      width: 360px;
+      height: 780px;
+      border-radius: 44px;
+      padding: 12px;
+      background: #0b0b0f;
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.06),
+        0 40px 80px rgba(0,0,0,0.45);
+      flex-shrink: 0;
+      position: relative;
+    }
+    .phone-screen {
+      width: 100%;
+      height: 100%;
+      border-radius: 34px;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--fg);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    .phone-screen.dark-in {
+      background: var(--surface-dark);
+      color: var(--fg-dark);
+    }
+
+    .island {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 96px;
+      height: 28px;
+      background: #0b0b0f;
+      border-radius: 20px;
+      z-index: 5;
+    }
+
+    .status {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 22px 6px;
+      font-size: 12px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      position: relative;
+      z-index: 2;
+    }
+    .status-icons {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+    .status-icons svg { display: block; }
+
+    .screen-body {
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .screen-scroll {
+      flex: 1;
+      overflow: hidden;
+      padding: 8px 18px 12px;
+    }
+
+    /* Shared tab bar — 5 tabs + center CTA */
+    .tabbar {
+      height: 72px;
+      padding: 6px 8px 14px;
+      display: grid;
+      grid-template-columns: 1fr 1fr 56px 1fr 1fr;
+      align-items: end;
+      gap: 2px;
+      background: var(--surface);
+      border-top: 0.5px solid var(--border);
+      box-shadow: var(--shadow-tab);
+      position: relative;
+      z-index: 3;
+    }
+    .dark-in .tabbar {
+      background: var(--surface-dark);
+      border-top-color: var(--border-dark);
+    }
+    .tab {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      min-height: 44px;
+      justify-content: center;
+      color: #9ca3af;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .tab.active { color: var(--accent); }
+    .dark-in .tab { color: #52526a; }
+    .dark-in .tab.active { color: var(--accent-dark); }
+    .tab svg { width: 22px; height: 22px; }
+
+    .tab-cta-wrap {
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      height: 56px;
+      margin-top: -18px;
+    }
+    .tab-cta {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      box-shadow: var(--shadow-cta);
+    }
+    .tab-cta svg { width: 24px; height: 24px; }
+
+    /* Frame 1 — cover */
+    .cover {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding: 8px 20px 0;
+      background:
+        linear-gradient(180deg, rgba(99,102,241,0.08) 0%, transparent 40%),
+        var(--bg);
+    }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-top: 8px;
+      margin-bottom: 20px;
+    }
+    .cover h1 {
+      font-family: var(--font-display);
+      font-size: 30px;
+      line-height: 1.15;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--fg);
+      text-wrap: pretty;
+      margin-bottom: 14px;
+    }
+    .cover h1 em {
+      font-style: normal;
+      color: var(--accent);
+    }
+    .cover p {
+      font-size: 15px;
+      line-height: 1.5;
+      color: var(--muted);
+      max-width: 28ch;
+      margin-bottom: 16px;
+    }
+    .tip {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      line-height: 1.45;
+      padding: 10px 12px;
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+    .lang-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 14px;
+    }
+    .lang-chip {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 6px 10px;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      min-height: 32px;
+    }
+    .lang-chip.on {
+      background: color-mix(in srgb, var(--accent) 12%, white);
+      border-color: color-mix(in srgb, var(--accent) 35%, white);
+      color: var(--accent);
+    }
+    .teaser {
+      margin-top: auto;
+      margin-bottom: 8px;
+      border-radius: var(--radius-md) var(--radius-md) 0 0;
+      border: 1px solid var(--border);
+      border-bottom: 0;
+      background: var(--surface);
+      padding: 12px;
+      opacity: 0.72;
+      transform: translateY(8px);
+    }
+    .teaser-label {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .teaser-row {
+      display: flex;
+      gap: 8px;
+    }
+    .teaser-tile {
+      flex: 1;
+      height: 48px;
+      border-radius: 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+    }
+    .teaser-tile.t1 { background: color-mix(in srgb, #a5b4fc 25%, white); }
+    .teaser-tile.t2 { background: color-mix(in srgb, #99f6e4 30%, white); }
+    .teaser-tile.t3 { background: color-mix(in srgb, #ddd6fe 30%, white); }
+
+    /* Frame 2 — today */
+    .greet-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+    .greet-row h2 {
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+    }
+    .greet-row .sub {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .xp-bell {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      display: grid;
+      place-items: center;
+      position: relative;
+    }
+    .xp-bell .dot {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .level-ribbon {
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      background: color-mix(in srgb, var(--surface) 70%, transparent);
+      border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+      backdrop-filter: blur(12px);
+      box-shadow: 0 4px 16px rgba(30, 27, 75, 0.04);
+    }
+    .level-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .level-top .lv {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: var(--accent);
+    }
+    .level-top .xp {
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .progress {
+      height: 6px;
+      border-radius: var(--radius-pill);
+      background: var(--surface-2);
+      overflow: hidden;
+    }
+    .progress > i {
+      display: block;
+      height: 100%;
+      width: 66%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), var(--accent-3));
+    }
+    .quests-meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .quest-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .quest-tile {
+      border-radius: var(--radius-md);
+      padding: 12px;
+      min-height: 108px;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border);
+      position: relative;
+      text-align: left;
+    }
+    .quest-tile .glyph {
+      width: 28px;
+      height: 28px;
+      border-radius: 9px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 10px;
+      background: rgba(255,255,255,0.55);
+    }
+    .quest-tile .glyph svg { width: 16px; height: 16px; }
+    .quest-tile .title {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.25;
+      color: var(--fg);
+      margin-bottom: 4px;
+    }
+    .quest-tile .meta {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.3;
+    }
+    .quest-tile .xp-pill {
+      margin-top: auto;
+      align-self: flex-end;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      padding: 3px 7px;
+      border-radius: var(--radius-pill);
+      background: rgba(255,255,255,0.65);
+      color: var(--fg);
+      border: 1px solid rgba(255,255,255,0.4);
+    }
+    .q-body { background: color-mix(in srgb, #c7d2fe 40%, white); }
+    .q-mind { background: color-mix(in srgb, #ddd6fe 45%, white); }
+    .q-meds { background: color-mix(in srgb, #99f6e4 35%, white); }
+    .q-learn { background: color-mix(in srgb, #fde68a 35%, white); }
+    .q-report { background: color-mix(in srgb, #fecdd3 30%, white); }
+    .q-chat { background: color-mix(in srgb, #a5f3fc 30%, white); }
+
+    .role-switch {
+      display: flex;
+      gap: 0;
+      margin-bottom: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-pill);
+      overflow: hidden;
+      width: fit-content;
+    }
+    .role-switch button {
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      min-height: 32px;
+    }
+    .role-switch button.on {
+      background: var(--fg);
+      color: #fff;
+    }
+
+    /* Frame 3 — detail */
+    .nav-back {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      min-height: 44px;
+    }
+    .nav-back .back {
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      display: grid;
+      place-items: center;
+    }
+    .nav-back .scr-title {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .quest-hero {
+      border-radius: var(--radius-lg);
+      padding: 18px 16px;
+      margin-bottom: 16px;
+      background: linear-gradient(145deg, color-mix(in srgb, #6366f1 18%, white), color-mix(in srgb, #8b5cf6 12%, white));
+      border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+    }
+    .quest-hero .kicker {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    .quest-hero h3 {
+      font-family: var(--font-display);
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin-bottom: 8px;
+    }
+    .quest-hero p {
+      font-size: 14px;
+      line-height: 1.45;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .reward-stamp {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1.5px solid var(--accent);
+      color: var(--accent);
+      background: rgba(255,255,255,0.55);
+    }
+
+    .steps-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 10px;
+    }
+    .step {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      min-height: 44px;
+    }
+    .step:last-of-type { border-bottom: 0; }
+    .step-check {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 1.5px solid var(--border);
+      flex-shrink: 0;
+      margin-top: 1px;
+      display: grid;
+      place-items: center;
+    }
+    .step.done .step-check {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .step .step-text {
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.35;
+    }
+    .step.done .step-text {
+      color: var(--muted);
+      text-decoration: line-through;
+      text-decoration-color: color-mix(in srgb, var(--muted) 40%, transparent);
+    }
+    .step .step-hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .primary-cta {
+      margin: 12px 0 4px;
+      width: 100%;
+      min-height: 52px;
+      border-radius: var(--radius-pill);
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+      box-shadow: var(--shadow-cta);
+    }
+
+    .wire-note {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--muted);
+      text-align: center;
+      margin-top: 6px;
+      letter-spacing: 0.04em;
+    }
+
+    /* Caregiver denser overlay state on frame 2 via data-role - shown as second set hidden by default toggle */
+    .caregiver-panel { display: none; }
+    .patient-panel { display: block; }
+    .phone[data-role="caregiver"] .caregiver-panel { display: block; }
+    .phone[data-role="caregiver"] .patient-panel { display: none; }
+
+    .case-list { display: flex; flex-direction: column; gap: 8px; }
+    .case-row {
+      display: grid;
+      grid-template-columns: 28px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      min-height: 72px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      text-align: left;
+    }
+    .esi-pill {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+      color: #fff;
+      font-variant-numeric: tabular-nums;
+    }
+    .esi-1 { background: var(--esi-1); }
+    .esi-2 { background: var(--esi-2); }
+    .esi-3 { background: var(--esi-3); }
+    .esi-5 { background: var(--esi-5); }
+    .case-title { font-size: 13px; font-weight: 700; line-height: 1.25; }
+    .case-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .case-audit { font-size: 10px; color: var(--muted); font-family: var(--font-mono); }
+    .outbreak {
+      border: 1px solid var(--esi-1);
+      background: color-mix(in srgb, var(--esi-1) 8%, white);
+      border-radius: var(--radius-md);
+      padding: 10px 12px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .outbreak strong { color: var(--esi-1); display: block; margin-bottom: 2px; font-size: 11px; letter-spacing: 0.04em; }
+
+    .footer-links {
+      margin-top: 36px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted-dark);
+    }
+    .footer-links a {
+      color: var(--accent-dark);
+      text-decoration: none;
+      margin: 0 10px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage" data-od-id="stage">
+    <div class="stage-caption" data-od-id="stage-caption">
+      <span>Wireframe · iPhone · HealAi</span>
+      <span class="brand">HealAi</span>
+    </div>
+
+    <div class="phones" data-od-id="phones-row">
+      <!-- FRAME 1: Cover -->
+      <article class="phone" data-od-id="phone-cover" aria-label="Cover poster">
+        <div class="phone-screen">
+          <div class="island" aria-hidden="true"></div>
+          <div class="status" data-od-id="cover-status">
+            <span>9:41</span>
+            <div class="status-icons">
+              <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor"><rect x="0" y="4" width="3" height="8" rx="0.5"/><rect x="4.5" y="2" width="3" height="10" rx="0.5"/><rect x="9" y="0" width="3" height="12" rx="0.5"/><rect x="13.5" y="3" width="2.5" height="9" rx="0.5" opacity="0.35"/></svg>
+              <svg width="15" height="12" viewBox="0 0 15 12" fill="currentColor"><path d="M7.5 2.5c2.2 0 4.2.9 5.7 2.3l-1.2 1.2A6.3 6.3 0 007.5 4.2a6.3 6.3 0 00-4.5 1.8L1.8 4.8A7.9 7.9 0 017.5 2.5z"/><path d="M7.5 5.5c1.3 0 2.5.5 3.4 1.4L9.7 8.1A3.3 3.3 0 007.5 7.2c-.9 0-1.7.3-2.3.9L4.1 6.9A4.8 4.8 0 017.5 5.5z"/><circle cx="7.5" cy="10" r="1.2"/></svg>
+              <svg width="25" height="12" viewBox="0 0 25 12"><rect x="0.5" y="1" width="21" height="10" rx="2" stroke="currentColor" fill="none"/><rect x="2" y="2.5" width="15" height="7" rx="1" fill="currentColor"/><rect x="22" y="3.5" width="2" height="5" rx="0.5" fill="currentColor"/></svg>
+            </div>
+          </div>
+          <div class="screen-body">
+            <div class="cover" data-od-id="cover-content">
+              <div class="eyebrow">Wireframe · HealAi · Multilingual</div>
+              <h1 data-od-id="cover-headline">Daily health quests for <em>patients &amp; caregivers</em>.</h1>
+              <p data-od-id="cover-body">AI symptom checks, clear urgency, and calm handoff — in the language your family uses.</p>
+              <div class="tip" data-od-id="cover-tip">Tap quests to open detail · Language chip in More · Center + starts a quick check</div>
+              <div class="lang-row" data-od-id="cover-langs">
+                <span class="lang-chip on">EN</span>
+                <span class="lang-chip">HI</span>
+                <span class="lang-chip">BN</span>
+                <span class="lang-chip">TA</span>
+              </div>
+              <div class="teaser" data-od-id="cover-teaser" aria-hidden="true">
+                <div class="teaser-label">Today · preview</div>
+                <div class="teaser-row">
+                  <div class="teaser-tile t1"></div>
+                  <div class="teaser-tile t2"></div>
+                  <div class="teaser-tile t3"></div>
+                </div>
+              </div>
+            </div>
+            <nav class="tabbar" data-od-id="cover-tabbar" aria-label="Main tabs">
+              <button class="tab" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 10.5L12 4l8 6.5V20a1 1 0 01-1 1h-5v-6H10v6H5a1 1 0 01-1-1v-9.5z"/></svg>Home</button>
+              <button class="tab" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4h4l1 4-2 1.5a10 10 0 005.5 5.5L16 13l4 1v4a2 2 0 01-2 2A14 14 0 014 6a2 2 0 012-2z"/><circle cx="17" cy="7" r="3"/></svg>Symptoms</button>
+              <div class="tab-cta-wrap"><button class="tab-cta" type="button" aria-label="Quick check" data-od-id="cover-center-cta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg></button></div>
+              <button class="tab" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 10h8M8 14h5"/><rect x="4" y="5" width="16" height="14" rx="3"/><path d="M9 5V4a3 3 0 016 0v1"/></svg>Chat</button>
+              <button class="tab" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="18" cy="12" r="1.5" fill="currentColor"/></svg>More</button>
+            </nav>
+          </div>
+        </div>
+      </article>
+
+      <!-- FRAME 2: Today quests -->
+      <article class="phone" data-od-id="phone-today" data-role="patient" aria-label="Today quests">
+        <div class="phone-screen">
+          <div class="island" aria-hidden="true"></div>
+          <div class="status" data-od-id="today-status">
+            <span>9:41</span>
+            <div class="status-icons">
+              <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor"><rect x="0" y="4" width="3" height="8" rx="0.5"/><rect x="4.5" y="2" width="3" height="10" rx="0.5"/><rect x="9" y="0" width="3" height="12" rx="0.5"/><rect x="13.5" y="3" width="2.5" height="9" rx="0.5" opacity="0.35"/></svg>
+              <svg width="15" height="12" viewBox="0 0 15 12" fill="currentColor"><path d="M7.5 2.5c2.2 0 4.2.9 5.7 2.3l-1.2 1.2A6.3 6.3 0 007.5 4.2a6.3 6.3 0 00-4.5 1.8L1.8 4.8A7.9 7.9 0 017.5 2.5z"/><path d="M7.5 5.5c1.3 0 2.5.5 3.4 1.4L9.7 8.1A3.3 3.3 0 007.5 7.2c-.9 0-1.7.3-2.3.9L4.1 6.9A4.8 4.8 0 017.5 5.5z"/><circle cx="7.5" cy="10" r="1.2"/></svg>
+              <svg width="25" height="12" viewBox="0 0 25 12"><rect x="0.5" y="1" width="21" height="10" rx="2" stroke="currentColor" fill="none"/><rect x="2" y="2.5" width="15" height="7" rx="1" fill="currentColor"/><rect x="22" y="3.5" width="2" height="5" rx="0.5" fill="currentColor"/></svg>
+            </div>
+          </div>
+          <div class="screen-body">
+            <div class="screen-scroll" data-od-id="today-content">
+              <div class="role-switch" data-od-id="role-switch" role="group" aria-label="Role">
+                <button type="button" class="on" data-role-btn="patient">Patient</button>
+                <button type="button" data-role-btn="caregiver">Caregiver</button>
+              </div>
+
+              <div class="patient-panel">
+                <div class="greet-row">
+                  <div>
+                    <h2 data-od-id="today-greeting">Good morning, Sam</h2>
+                    <div class="sub">How are you feeling today?</div>
+                  </div>
+                  <button class="xp-bell" type="button" aria-label="XP notifications" data-od-id="xp-bell">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9a6 6 0 0112 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 004 0"/></svg>
+                    <span class="dot"></span>
+                  </button>
+                </div>
+
+                <div class="level-ribbon" data-od-id="level-ribbon">
+                  <div class="level-top">
+                    <span class="lv">LV 14 · Level 14</span>
+                    <span class="xp">1648 / 2480 XP</span>
+                  </div>
+                  <div class="progress" aria-hidden="true"><i></i></div>
+                </div>
+                <div class="quests-meta" data-od-id="quests-meta">6 quests waiting · earn 280 XP today</div>
+
+                <div class="quest-grid" data-od-id="quest-grid">
+                  <button class="quest-tile q-body" type="button" data-od-id="quest-body">
+                    <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="#4338ca" stroke-width="1.8"><path d="M12 21s-7-4.5-7-10a4 4 0 018 0 4 4 0 018 0c0 5.5-7 10-7 10z"/></svg></span>
+                    <span class="title">Body — Log symptoms</span>
+                    <span class="meta">Head · mild · 2 min</span>
+                    <span class="xp-pill">+60 XP</span>
+                  </button>
+                  <button class="quest-tile q-mind" type="button" data-od-id="quest-mind">
+                    <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="#6d28d9" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 1.5"/></svg></span>
+                    <span class="title">Mind — 5-min breath</span>
+                    <span class="meta">Before evening meds</span>
+                    <span class="xp-pill">+40 XP</span>
+                  </button>
+                  <button class="quest-tile q-meds" type="button" data-od-id="quest-meds">
+                    <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="#0f766e" stroke-width="1.8"><rect x="7" y="3" width="10" height="18" rx="3"/><path d="M7 10h10"/></svg></span>
+                    <span class="title">Meds — Evening dose</span>
+                    <span class="meta">Reminder 8:00 PM</span>
+                    <span class="xp-pill">+50 XP</span>
+                  </button>
+                  <button class="quest-tile q-learn" type="button" data-od-id="quest-learn">
+                    <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="#b45309" stroke-width="1.8"><path d="M4 19V6a2 2 0 012-2h11v15H6a2 2 0 00-2 2z"/><path d="M17 4v15"/></svg></span>
+                    <span class="title">Learn — Fever &amp; ER</span>
+                    <span class="meta">When to escalate</span>
+                    <span class="xp-pill">+35 XP</span>
+                  </button>
+                  <button class="quest-tile q-report" type="button" data-od-id="quest-report">
+                    <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="#be123c" stroke-width="1.8"><path d="M8 7h8M8 11h8M8 15h5"/><rect x="5" y="3" width="14" height="18" rx="2"/></svg></span>
+                    <span class="title">Report — Share last check</span>
+                    <span class="meta">With caregiver</span>
+                    <span class="xp-pill">+45 XP</span>
+                  </button>
+                  <button class="quest-tile q-chat" type="button" data-od-id="quest-chat">
+                    <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="#0e7490" stroke-width="1.8"><path d="M5 6h14v9H9l-4 3V6z"/></svg></span>
+                    <span class="title">Chat — Ask HealAi</span>
+                    <span class="meta">Dizziness after standing</span>
+                    <span class="xp-pill">+50 XP</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="caregiver-panel" data-od-id="caregiver-panel">
+                <div class="greet-row">
+                  <div>
+                    <h2>Cases · ASHA</h2>
+                    <div class="sub">12 active · sorted by urgency</div>
+                  </div>
+                </div>
+                <div class="outbreak" data-od-id="outbreak-banner">
+                  <strong>OUTBREAK ALERT</strong>
+                  4 fever cases in Sector 7 · past 48 hours. Tap cluster →
+                </div>
+                <div class="case-list">
+                  <button class="case-row" type="button" data-od-id="case-1">
+                    <span class="esi-pill esi-1">1</span>
+                    <span>
+                      <span class="case-title">Chest pain, short breath</span>
+                      <span class="case-meta">Rampur · 15 min ago</span>
+                    </span>
+                    <span class="case-audit">Called · OK</span>
+                  </button>
+                  <button class="case-row" type="button" data-od-id="case-2">
+                    <span class="esi-pill esi-2">2</span>
+                    <span>
+                      <span class="case-title">Heavy bleeding</span>
+                      <span class="case-meta">Khandwa · 1 hr ago</span>
+                    </span>
+                    <span class="case-audit">No answer</span>
+                  </button>
+                  <button class="case-row" type="button" data-od-id="case-3">
+                    <span class="esi-pill esi-3">3</span>
+                    <span>
+                      <span class="case-title">High fever, 3 days</span>
+                      <span class="case-meta">Sector 4 · 2 hrs ago</span>
+                    </span>
+                    <span class="case-audit">Pending</span>
+                  </button>
+                  <button class="case-row" type="button" data-od-id="case-4">
+                    <span class="esi-pill esi-5">5</span>
+                    <span>
+                      <span class="case-title">Mild cough</span>
+                      <span class="case-meta">Block B · Yesterday</span>
+                    </span>
+                    <span class="case-audit">Home care</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <nav class="tabbar" data-od-id="today-tabbar" aria-label="Main tabs">
+              <button class="tab active" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 10.5L12 4l8 6.5V20a1 1 0 01-1 1h-5v-6H10v6H5a1 1 0 01-1-1v-9.5z"/></svg>Home</button>
+              <button class="tab" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4h4l1 4-2 1.5a10 10 0 005.5 5.5L16 13l4 1v4a2 2 0 01-2 2A14 14 0 014 6a2 2 0 012-2z"/><circle cx="17" cy="7" r="3"/></svg>Symptoms</button>
+              <div class="tab-cta-wrap"><button class="tab-cta" type="button" aria-label="Quick check" data-od-id="today-center-cta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg></button></div>
+              <button class="tab" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 10h8M8 14h5"/><rect x="4" y="5" width="16" height="14" rx="3"/><path d="M9 5V4a3 3 0 016 0v1"/></svg>Chat</button>
+              <button class="tab" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="18" cy="12" r="1.5" fill="currentColor"/></svg>More</button>
+            </nav>
+          </div>
+        </div>
+      </article>
+
+      <!-- FRAME 3: Quest detail -->
+      <article class="phone" data-od-id="phone-detail" aria-label="Quest detail">
+        <div class="phone-screen">
+          <div class="island" aria-hidden="true"></div>
+          <div class="status" data-od-id="detail-status">
+            <span>9:41</span>
+            <div class="status-icons">
+              <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor"><rect x="0" y="4" width="3" height="8" rx="0.5"/><rect x="4.5" y="2" width="3" height="10" rx="0.5"/><rect x="9" y="0" width="3" height="12" rx="0.5"/><rect x="13.5" y="3" width="2.5" height="9" rx="0.5" opacity="0.35"/></svg>
+              <svg width="15" height="12" viewBox="0 0 15 12" fill="currentColor"><path d="M7.5 2.5c2.2 0 4.2.9 5.7 2.3l-1.2 1.2A6.3 6.3 0 007.5 4.2a6.3 6.3 0 00-4.5 1.8L1.8 4.8A7.9 7.9 0 017.5 2.5z"/><path d="M7.5 5.5c1.3 0 2.5.5 3.4 1.4L9.7 8.1A3.3 3.3 0 007.5 7.2c-.9 0-1.7.3-2.3.9L4.1 6.9A4.8 4.8 0 017.5 5.5z"/><circle cx="7.5" cy="10" r="1.2"/></svg>
+              <svg width="25" height="12" viewBox="0 0 25 12"><rect x="0.5" y="1" width="21" height="10" rx="2" stroke="currentColor" fill="none"/><rect x="2" y="2.5" width="15" height="7" rx="1" fill="currentColor"/><rect x="22" y="3.5" width="2" height="5" rx="0.5" fill="currentColor"/></svg>
+            </div>
+          </div>
+          <div class="screen-body">
+            <div class="screen-scroll" data-od-id="detail-content">
+              <div class="nav-back" data-od-id="detail-nav">
+                <button class="back" type="button" aria-label="Back">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>
+                </button>
+                <span class="scr-title">Quest</span>
+              </div>
+
+              <div class="quest-hero" data-od-id="quest-hero">
+                <div class="kicker">Body · Symptoms</div>
+                <h3>Log symptoms — head &amp; neck</h3>
+                <p>Guided check that flows into diagnosis → urgency (ESI) → report → notify. Same workflow as the app.</p>
+                <span class="reward-stamp">REWARD +60 XP</span>
+              </div>
+
+              <div class="steps-label">Steps</div>
+              <div class="step done" data-od-id="step-1">
+                <span class="step-check"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12l5 5L19 7"/></svg></span>
+                <div>
+                  <div class="step-text">Select body area</div>
+                  <div class="step-hint">Head selected</div>
+                </div>
+              </div>
+              <div class="step" data-od-id="step-2">
+                <span class="step-check"></span>
+                <div>
+                  <div class="step-text">Choose symptoms</div>
+                  <div class="step-hint">Tap all that apply · ≥44px chips</div>
+                </div>
+              </div>
+              <div class="step" data-od-id="step-3">
+                <span class="step-check"></span>
+                <div>
+                  <div class="step-text">Rate severity</div>
+                  <div class="step-hint">Mild · Moderate · Severe</div>
+                </div>
+              </div>
+              <div class="step" data-od-id="step-4">
+                <span class="step-check"></span>
+                <div>
+                  <div class="step-text">Run AI analysis</div>
+                  <div class="step-hint">Then ESI priority screen</div>
+                </div>
+              </div>
+
+              <button class="primary-cta" type="button" data-od-id="start-quest">Start quest</button>
+              <div class="wire-note">WIREFRAME · structure + states · light polish</div>
+            </div>
+            <nav class="tabbar" data-od-id="detail-tabbar" aria-label="Main tabs">
+              <button class="tab" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 10.5L12 4l8 6.5V20a1 1 0 01-1 1h-5v-6H10v6H5a1 1 0 01-1-1v-9.5z"/></svg>Home</button>
+              <button class="tab active" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4h4l1 4-2 1.5a10 10 0 005.5 5.5L16 13l4 1v4a2 2 0 01-2 2A14 14 0 014 6a2 2 0 012-2z"/><circle cx="17" cy="7" r="3"/></svg>Symptoms</button>
+              <div class="tab-cta-wrap"><button class="tab-cta" type="button" aria-label="Quick check" data-od-id="detail-center-cta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg></button></div>
+              <button class="tab" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 10h8M8 14h5"/><rect x="4" y="5" width="16" height="14" rx="3"/><path d="M9 5V4a3 3 0 016 0v1"/></svg>Chat</button>
+              <button class="tab" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="18" cy="12" r="1.5" fill="currentColor"/></svg>More</button>
+            </nav>
+          </div>
+        </div>
+      </article>
+    </div>
+
+    <p class="footer-links">
+      <a href="mobile-ios.html">iOS frames</a>
+      <a href="mobile-android.html">Android frames</a>
+      <a href="DESIGN.md">DESIGN.md</a>
+    </p>
+  </main>
+
+  <script>
+    (function () {
+      var phone = document.querySelector('[data-od-id="phone-today"]');
+      var buttons = document.querySelectorAll("[data-role-btn]");
+      buttons.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var role = btn.getAttribute("data-role-btn");
+          phone.setAttribute("data-role", role);
+          buttons.forEach(function (b) {
+            b.classList.toggle("on", b === btn);
+          });
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

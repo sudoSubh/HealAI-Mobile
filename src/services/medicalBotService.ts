@@ -35,7 +35,7 @@ export async function generateMedicalResponseWithImage(
   }
 }
 
-export const MEDICAL_CONTEXT = `You are an advanced medical AI assistant named HealAI Assistant powered by Google's Gemini API. Format your responses using proper medical terminology:
+export const MEDICAL_CONTEXT = `You are an advanced medical AI assistant named HealAI Assistant. Format your responses using proper medical terminology:
 
 Formatting Guidelines:
 - Use ## for section headers

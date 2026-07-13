@@ -273,12 +273,68 @@ export default function ReportsScreen() {
   };
 
   const analyzeReport = async (fileId: string) => {
+    if (Platform.OS === 'web') {
+      (document.activeElement as HTMLElement)?.blur();
+    }
     setReports(prev => prev.map(f => f.id === fileId ? { ...f, status: 'analyzing' } : f));
     const file = reports.find(f => f.id === fileId);
     if (!file) return;
     try {
       const lang = getLanguageName();
-      const prompt = `You are a medical AI assistant. Analyze this medical report/scan image thoroughly.
+      const isLikelyLabReport = file.name.toLowerCase().includes('lab') ||
+        file.name.toLowerCase().includes('blood') ||
+        file.name.toLowerCase().includes('urine') ||
+        file.name.toLowerCase().includes('cbc') ||
+        file.name.toLowerCase().includes('report') ||
+        file.mimeType === 'application/pdf';
+
+      // ── Lab Buddy Mode (adapted from Healix AI Lab Buddy agent) ──
+      // T=0.0 is applied automatically by callGemini for 'report-analyzer' task.
+      // The Lab Buddy concept from Healix AI:
+      //   1. Extract biomarker values with units
+      //   2. Classify each as [CRITICAL], [ABNORMAL], or [OPTIMAL]
+      //   3. Explain "Why it matters" in plain language
+      //   4. Suggest a "Lab Buddy Habit" — one small daily action
+      //   5. Use a high-energy, supportive Medical Coach tone
+      const labBuddyPrompt = `You are HealAI Lab Buddy — a high-energy, supportive Medical Intelligence Coach (concept from Healix AI).
+Your job is to translate scary lab and medical reports into clear, empowering explanations.
+
+T=0.0 DETERMINISTIC MODE: Output must be structured, consistent, and reproducible.
+
+Analyze this medical report/scan image and provide a structured analysis:
+
+SECTION 1 — REPORT OVERVIEW:
+1. **Report Type** (Lab Test / Blood Work / MRI / CT Scan / X-Ray / Ultrasound / Other)
+2. **Date / Patient Info** if visible (anonymize if possible)
+3. **Overall Status**: [CRITICAL] / [ABNORMAL] / [OPTIMAL] / [NORMAL]
+
+SECTION 2 — KEY FINDINGS (Lab Buddy Biomarker Breakdown):
+For each significant finding or biomarker, provide:
+• **[STATUS] Biomarker Name**: Value (Unit) — Reference Range
+  - *Why it matters*: Plain language explanation of what this measures
+  - *Lab Buddy Habit*: One simple daily habit to support this value
+Use [CRITICAL] for emergency values, [ABNORMAL] for out-of-range values, [OPTIMAL] for healthy values.
+
+SECTION 3 — NORMAL VALUES:
+List all values within normal range in a compact format.
+
+SECTION 4 — CONDITIONS DETECTED OR SUSPECTED:
+List any conditions indicated, with brief clinical reasoning.
+
+SECTION 5 — SEVERITY LEVEL:
+Overall: Normal / Mild / Moderate / Severe — with brief explanation.
+
+SECTION 6 — IMMEDIATE ACTIONS RECOMMENDED:
+Prioritized action items (e.g., "Consult a doctor urgently", "Repeat test in 3 months").
+
+SECTION 7 — FOLLOW-UP REQUIRED:
+Yes/No + specific timeframe + reason.
+
+TONE: Be supportive and encouraging while being medically accurate. Use plain English for explanations.
+CRITICAL REQUIREMENT: Write entire analysis in ${lang} language. Keep section headers in English.`;
+
+      const imagingPrompt = `You are a medical AI assistant. Analyze this medical report/scan image thoroughly.
+T=0.0 DETERMINISTIC MODE: Output must be structured and reproducible.
 Provide a structured analysis with:
 1. **Report Type** (lab test / MRI / CT scan / X-ray)
 2. **Key Findings** - list all abnormal or notable values
@@ -289,14 +345,17 @@ Provide a structured analysis with:
 7. **Follow-up Required** (Yes/No + reason)
 Be precise, use medical terminology but also provide plain-language explanations.
 CRITICAL REQUIREMENT: You MUST write your entire analysis response completely in the ${lang} language.`;
+
+      const prompt = isLikelyLabReport ? labBuddyPrompt : imagingPrompt;
       const result = await callGemini(prompt, file.base64, file.mimeType, 'report-analyzer');
-      const updated = reports.map(f => f.id === fileId ? { ...f, status: 'analyzed' as const, analysisResult: result } : f);
+      const updated = reports.map(f => f.id === fileId ? { ...f, status: 'analyzed' as const, analysisResult: result, isLabReport: isLikelyLabReport } : f);
       setReports(updated);
       await AsyncStorage.setItem('medicalReports', JSON.stringify(updated));
     } catch {
       setReports(prev => prev.map(f => f.id === fileId ? { ...f, status: 'error' as const, analysisResult: 'Analysis failed.' } : f));
     }
   };
+
 
   const removeReport = async (id: string) => {
     const updated = reports.filter(f => f.id !== id);
@@ -312,12 +371,13 @@ CRITICAL REQUIREMENT: You MUST write your entire analysis response completely in
     const profileStr = profile.name ? `Patient: ${profile.name}, Age ${profile.age}, ${profile.gender}, Height ${profile.height}cm, Weight ${profile.weight}kg, Blood Group ${profile.bloodGroup}.
 Conditions: ${profile.medicalConditions.join(', ') || 'None'}. Allergies: ${profile.allergies.join(', ') || 'None'}.` : 'General healthy adult.';
     const lang = getLanguageName();
-    const prompt = `You are a certified nutritionist. Create a 3-day personalized meal plan.
+    const prompt = `You are a certified Indian nutritionist. Create a 3-day personalized meal plan.
 ${profileStr}
 ${reportSummary ? `Report findings: ${reportSummary.slice(0, 800)}` : ''}
-Return ONLY a valid JSON array: [{"day":"Day 1","meals":[{"label":"Breakfast","items":["item 1","item 2"]},{"label":"Lunch","items":["item 1"]},{"label":"Dinner","items":["item 1"]},{"label":"Snacks","items":["item 1"]}],"guidelines":"One sentence.","calorieTarget":"1800-2000 kcal"}]
-Tailor to conditions and avoid allergens. Include Indian/global food items.
-CRITICAL REQUIREMENT: You MUST translate the day names, meal labels, meal items, guidelines, and calorie targets in the JSON response values into the ${lang} language. Keep the JSON keys in English as specified.`;
+Return ONLY a valid JSON array matching this schema:
+[{"day":"Day 1","meals":[{"label":"Breakfast","items":["item 1","item 2"],"balancedIngredients":["suggested India-based ingredients to add to make it balanced, e.g. Moringa, Amla, Curry leaves, Sprouts, Paneer, Ghee, Turmeric, Sabja seeds"]}],"guidelines":"One sentence.","calorieTarget":"1800-2000 kcal"}]
+Ensure all suggested ingredients are traditional, accessible India-based items to balance nutrition.
+CRITICAL REQUIREMENT: You MUST translate the day names, meal labels, meal items, balancedIngredients, guidelines, and calorie targets in the JSON response values into the ${lang} language. Keep the JSON keys in English as specified.`;
     try {
       const raw = await callGemini(prompt, undefined, undefined, 'daily-insight');
       const clean = raw.replace(/```json\n?/g, '').replace(/```/g, '').trim();
@@ -600,7 +660,17 @@ CRITICAL REQUIREMENT: You MUST translate the recommendation title and descriptio
                   </View>
                   {file.analysisResult && (
                     <View style={[styles.analysisBox, { backgroundColor: isDark ? '#18181b' : '#f8fafc' }]}>
-                      <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? Colors.slate[400] : Colors.slate[500], marginBottom: 6 }}>AI ANALYSIS</Text>
+                      {/* Lab Buddy badge — shown when the file was detected as a lab report */}
+                      {(file as any).isLabReport ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                          <View style={{ backgroundColor: Colors.emerald[600], borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 }}>
+                            <Text style={{ fontSize: 10, color: '#fff', fontWeight: '800', letterSpacing: 0.5 }}>🧪 LAB BUDDY</Text>
+                          </View>
+                          <Text style={{ fontSize: 10, color: isDark ? Colors.slate[400] : Colors.slate[500] }}>AI Medical Coach · T=0.0</Text>
+                        </View>
+                      ) : (
+                        <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? Colors.slate[400] : Colors.slate[500], marginBottom: 6 }}>AI ANALYSIS · T=0.0</Text>
+                      )}
                       <Markdown style={{
                         body: { color: isDark ? Colors.slate[300] : Colors.slate[700], fontSize: 12, lineHeight: 18 },
                         bullet_list: { marginVertical: 4 },
@@ -615,6 +685,7 @@ CRITICAL REQUIREMENT: You MUST translate the recommendation title and descriptio
                       </Markdown>
                     </View>
                   )}
+
                 </Card.Content>
               </Card>
             ))}
@@ -656,6 +727,14 @@ CRITICAL REQUIREMENT: You MUST translate the recommendation title and descriptio
                     {(meal.items || []).map((item: string, j: number) => (
                       <Text key={j} style={{ fontSize: 12, color: isDark ? Colors.slate[300] : Colors.slate[600], lineHeight: 18 }}>• {item}</Text>
                     ))}
+                    {meal.balancedIngredients && meal.balancedIngredients.length > 0 && (
+                      <View style={{ marginTop: 8, padding: 8, borderRadius: 8, backgroundColor: isDark ? 'rgba(16,185,129,0.06)' : '#f0fdf4', borderWidth: 0.5, borderColor: isDark ? 'rgba(16,185,129,0.2)' : '#bcf0da' }}>
+                        <Text style={{ fontSize: 11, fontWeight: '800', color: Colors.emerald[600], marginBottom: 2 }}>💡 Balanced Additions:</Text>
+                        <Text style={{ fontSize: 10, color: isDark ? Colors.slate[300] : Colors.slate[600], lineHeight: 15 }}>
+                          {meal.balancedIngredients.join(', ')}
+                        </Text>
+                      </View>
+                    )}
                   </Surface>
                 ))}
                 {dietPlan[activeDayIdx]?.calorieTarget && (

@@ -1,460 +1,686 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   ScrollView,
   StyleSheet,
-  useColorScheme,
-  Dimensions,
+  TouchableOpacity,
   Linking,
   RefreshControl,
-  TouchableOpacity,
-  Platform,
-  Image,
+  Dimensions,
 } from 'react-native';
-import { Text, Card, Button, Surface, Chip, FAB, useTheme } from 'react-native-paper';
+import { Surface, Dialog, Portal, TextInput } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  withRepeat,
-  withSequence,
-  FadeInDown,
-  FadeIn,
-} from 'react-native-reanimated';
-import { Colors } from '../../theme';
-import { generateDailyInsight, DailyInsight } from '../../services/dailyInsightsService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
+import * as Location from 'expo-location';
+import { useHealTheme, Colors } from '../../theme';
+import { getSymptomCheckHistoryFromNeo4j } from '../../services/neo4jService';
+import { runAgenticOutbreakScan, OutbreakRadarAlert } from '../../services/outbreakRadarService';
 import { useTranslation } from '../../localization';
+
+// UI Primitives
+import { AppText } from '../../components/ui/AppText';
+import { GradientButton } from '../../components/ui/GradientButton';
+import { GlassCard } from '../../components/ui/GlassCard';
+import { EsiBadge } from '../../components/ui/EsiBadge';
+import { PressableScale } from '../../components/ui/PressableScale';
 
 const { width } = Dimensions.get('window');
 
-const TYPEWRITER_WORDS = [
-  'Symptom Checker',
-  '24/7 Medical Chatbot',
-  'Nearby Clinics',
-  'Health Education',
-  'Health Hub',
-];
-
-const FEATURES = [
-  { icon: 'stethoscope', title: 'Symptoms', description: 'AI-powered symptom analysis', route: '/symptoms', color: Colors.teal[600] },
-  { icon: 'robot', title: 'AI Chatbot', description: '24/7 medical guidance', route: '/chat', color: Colors.emerald[600] },
-  { icon: 'file-document', title: 'Reports', description: 'Upload & analyze reports', route: '/reports', color: Colors.blue[600] },
-  { icon: 'map-marker', title: 'Find Clinics', description: 'Locate nearby hospitals', route: '/resources', color: Colors.violet[600] },
-  { icon: 'book-open-variant', title: 'Education', description: 'Health articles & videos', route: '/education', color: Colors.amber[600] },
-  { icon: 'shield-check', title: 'Emergency', description: 'One-tap emergency call', route: 'emergency', color: Colors.rose[600] },
-];
-
-const STATS = [
-  { value: '10M+', label: 'Consultations', icon: 'chart-line' },
-  { value: '150+', label: 'Conditions', icon: 'stethoscope' },
-  { value: '24/7', label: 'Available', icon: 'clock' },
-  { value: '98%', label: 'Satisfaction', icon: 'star' },
-];
-
 export default function HomeScreen() {
-  const { t } = useTranslation();
   const router = useRouter();
-  const theme = useTheme();
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
-  const [typewriterText, setTypewriterText] = useState('');
-  const [wordIndex, setWordIndex] = useState(0);
-  const [charIndex, setCharIndex] = useState(0);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [insight, setInsight] = useState<DailyInsight | null>(null);
-  const [insightLoading, setInsightLoading] = useState(true);
+  const { t } = useTranslation();
+  const { isDark, colors, spacing, radii, typeScale, esi } = useHealTheme();
+
+  const [userName, setUserName] = useState('Meena Patel');
+  const [userPhone, setUserPhone] = useState('+91 98765 43210');
+  const [timelineData, setTimelineData] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [isAshaWorker, setIsAshaWorker] = useState(false);
+  const [outbreaks, setOutbreaks] = useState<OutbreakRadarAlert[]>([]);
+  const [currentLocation, setCurrentLocation] = useState('Select Location');
+  const [locationModalVisible, setLocationModalVisible] = useState(false);
+  const [newLocationText, setNewLocationText] = useState('');
+  const [detectingLocation, setDetectingLocation] = useState(false);
 
-  const pulseValue = useSharedValue(1);
+  const saveLocation = async (address: string) => {
+    setCurrentLocation(address);
+    try {
+      const sessionStr = await AsyncStorage.getItem('user_session');
+      const session = sessionStr ? JSON.parse(sessionStr) : {};
+      session.address = address;
+      await AsyncStorage.setItem('user_session', JSON.stringify(session));
+    } catch {}
+    setLocationModalVisible(false);
+  };
 
-  useEffect(() => {
-    pulseValue.value = withRepeat(
-      withSequence(
-        withTiming(1.15, { duration: 1200 }),
-        withTiming(1, { duration: 1200 })
-      ),
-      -1,
-      true
-    );
-  }, []);
+  const detectGPSLocation = async () => {
+    setDetectingLocation(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        alert('Permission to access location was denied');
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({});
+      const geocode = await Location.reverseGeocodeAsync({
+        latitude: loc.coords.latitude,
+        longitude: loc.coords.longitude,
+      });
+      if (geocode && geocode.length > 0) {
+        const addr = geocode[0];
+        const formatted = [addr.name, addr.street, addr.city].filter(Boolean).join(', ');
+        setNewLocationText(formatted || `${loc.coords.latitude}, ${loc.coords.longitude}`);
+      } else {
+        setNewLocationText(`${loc.coords.latitude}, ${loc.coords.longitude}`);
+      }
+    } catch (err) {
+      console.warn(err);
+      alert('Failed to detect GPS location');
+    } finally {
+      setDetectingLocation(false);
+    }
+  };
 
-  const pulseStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: pulseValue.value }],
-  }));
+  // Dynamic greeting based on hours
+  const getGreeting = () => {
+    const hours = new Date().getHours();
+    if (hours < 12) return 'Good morning';
+    if (hours < 18) return 'Good afternoon';
+    return 'Good evening';
+  };
 
-  // Typewriter effect
-  useEffect(() => {
-    const word = TYPEWRITER_WORDS[wordIndex];
-    const timeout = setTimeout(() => {
-      if (!isDeleting) {
-        if (charIndex < word.length) {
-          setTypewriterText(word.slice(0, charIndex + 1));
-          setCharIndex(charIndex + 1);
-        } else {
-          setTimeout(() => setIsDeleting(true), 2000);
+  const loadSessionAndData = useCallback(async () => {
+    try {
+      // 1. Fetch user session details
+      const sessionStr = await AsyncStorage.getItem('user_session');
+      if (sessionStr) {
+        const session = JSON.parse(sessionStr);
+        if (session.name) setUserName(session.name);
+        if (session.identifier) {
+          const cleanPhone = session.identifier;
+          setUserPhone(cleanPhone.length === 10 ? `+91 ${cleanPhone.slice(0, 5)} ${cleanPhone.slice(5)}` : cleanPhone);
+        }
+        if (session.role === 'caregiver') setIsAshaWorker(true);
+        if (session.address) {
+          setCurrentLocation(session.address);
+          setNewLocationText(session.address);
         }
       } else {
-        if (charIndex > 0) {
-          setTypewriterText(word.slice(0, charIndex - 1));
-          setCharIndex(charIndex - 1);
-        } else {
-          setIsDeleting(false);
-          setWordIndex((prev) => (prev + 1) % TYPEWRITER_WORDS.length);
-        }
+        setIsAshaWorker(false);
       }
-    }, isDeleting ? 40 : 80);
-    return () => clearTimeout(timeout);
-  }, [charIndex, isDeleting, wordIndex]);
 
-  // Load daily insight
-  const loadInsight = useCallback(async (forceNew = false) => {
-    setInsightLoading(true);
-    try {
-      const data = await generateDailyInsight(forceNew);
-      setInsight(data);
+      // 2. Fetch past analysis checks timeline
+      const history = await getSymptomCheckHistoryFromNeo4j();
+      setTimelineData(history);
+
+      // 3. Scan for active outbreak clusters
+      const alerts = await runAgenticOutbreakScan();
+      setOutbreaks(alerts);
     } catch (e) {
-      console.error('Insight error:', e);
-    } finally {
-      setInsightLoading(false);
+      console.warn('Failed to load home screen session/history data:', e);
     }
   }, []);
 
-  useEffect(() => { loadInsight(); }, [loadInsight]);
+  // Refresh data when screen gains focus
+  useFocusEffect(
+    useCallback(() => {
+      loadSessionAndData();
+    }, [loadSessionAndData])
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadInsight(true);
+    await loadSessionAndData();
     setRefreshing(false);
   };
 
-  const handleFeaturePress = (route: string) => {
-    if (route === 'emergency') {
+  const handleQuickAccess = (route: string) => {
+    if (route === 'sos') {
       Linking.openURL('tel:112');
     } else {
       router.push(route as any);
     }
   };
 
-  const categoryColors: Record<string, { bg: string; text: string }> = {
-    Nutrition: { bg: isDark ? '#064e3b' : '#d1fae5', text: isDark ? '#6ee7b7' : '#065f46' },
-    Exercise: { bg: isDark ? '#1e3a8a' : '#dbeafe', text: isDark ? '#93c5fd' : '#1e40af' },
-    'Mental Health': { bg: isDark ? '#4c1d95' : '#ede9fe', text: isDark ? '#c4b5fd' : '#5b21b6' },
-    Sleep: { bg: isDark ? '#312e81' : '#e0e7ff', text: isDark ? '#a5b4fc' : '#3730a3' },
-    Prevention: { bg: isDark ? '#78350f' : '#fef3c7', text: isDark ? '#fcd34d' : '#92400e' },
-    'General Health': { bg: isDark ? '#134e4a' : '#ccfbf1', text: isDark ? '#5eead4' : '#115e59' },
+  const getTimeAgo = (dateStr: string) => {
+    try {
+      const diff = new Date().getTime() - new Date(dateStr).getTime();
+      const mins = Math.floor(diff / 60000);
+      if (mins < 60) return `${mins}m ago`;
+      const hrs = Math.floor(mins / 60);
+      if (hrs < 24) return `${hrs}h ago`;
+      const days = Math.floor(hrs / 24);
+      return `${days}d ago`;
+    } catch (e) {
+      return '1d ago';
+    }
   };
 
+  const QUICK_ACCESS_ITEMS = [
+    { label: 'Symptom Checker', icon: 'stethoscope', route: '/symptoms', color: colors.primary },
+    { label: 'Report Scanner', icon: 'camera-outline', route: '/reports', color: colors.secondary },
+    { label: 'Health Chat', icon: 'message-processing', route: '/chat', color: colors.tertiary },
+    { label: 'AI Nurse Call', icon: 'phone-in-talk', route: '/nurse-call', color: Colors.indigo[500] },
+    { label: 'Pill Reminders', icon: 'pill', route: '/reminders', color: Colors.amber[600] },
+    { label: 'Case History', icon: 'history', route: '/history', color: Colors.rose[500] },
+  ];
+
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
+      {/* Navigation Header */}
+      <View style={[styles.navHeader, { borderBottomColor: colors.border }]}>
+        <View style={styles.navRow}>
+          <View style={styles.logoRow}>
+            <View style={[styles.logoIcon, { backgroundColor: colors.primary }]}>
+              <MaterialCommunityIcons name="heart-pulse" size={18} color="#fff" />
+            </View>
+            <AppText variant="title" style={{ fontWeight: '900' }}>
+              Heal<AppText variant="title" style={{ color: colors.primary, fontWeight: '900' }}>AI</AppText>
+            </AppText>
+            <TouchableOpacity 
+              onPress={() => setLocationModalVisible(true)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 8, paddingVertical: 4, paddingHorizontal: 6, backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#f1f5f9', borderRadius: 8 }}
+            >
+              <MaterialCommunityIcons name="map-marker" size={14} color={colors.primary} />
+              <AppText variant="micro" color={colors.text} numberOfLines={1} style={{ maxWidth: 80, fontWeight: '800' }}>
+                {currentLocation}
+              </AppText>
+              <MaterialCommunityIcons name="chevron-down" size={10} color={colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <TouchableOpacity onPress={() => router.push('/more')} style={[styles.navLanguage, { borderColor: colors.border }]}>
+              <AppText variant="mono" color={colors.text}>ENGLISH</AppText>
+              <MaterialCommunityIcons name="chevron-down" size={12} color={colors.text} />
+            </TouchableOpacity>
+            <TouchableOpacity 
+              onPress={() => router.push('/more')} 
+              style={[
+                styles.navProfile, 
+                { 
+                  backgroundColor: colors.primary + '15', 
+                  width: 30, 
+                  height: 30, 
+                  borderRadius: 15, 
+                  justifyContent: 'center', 
+                  alignItems: 'center' 
+                }
+              ]}
+            >
+              <AppText variant="micro" color={colors.primary} style={{ fontWeight: '900' }}>MP</AppText>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.teal[500]} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24, paddingTop: 12 }}
       >
-        {/* Header */}
-        <Animated.View entering={FadeIn.duration(600)} style={styles.header}>
-          <View style={styles.logoRow}>
-            <View style={styles.logoIcon}>
-              <MaterialCommunityIcons name="heart-pulse" size={20} color="#fff" />
+        {/* Welcoming Greeting Card */}
+        <Animated.View entering={FadeIn.duration(600)} style={{ marginBottom: 16 }}>
+          <GlassCard padded={false} style={styles.welcomeCard}>
+            <View style={[styles.welcomeGradient, { backgroundColor: isDark ? 'rgba(99,102,241,0.08)' : '#eef2ff' }]}>
+              <View style={styles.welcomeInfo}>
+                <AppText variant="caption" color={colors.textMuted}>{getGreeting()},</AppText>
+                <AppText variant="headline" style={{ marginTop: 2, fontWeight: '900' }}>{userName}</AppText>
+                <AppText variant="caption" color={colors.textMuted} style={{ marginTop: 4 }}>{userPhone}</AppText>
+              </View>
+              <View style={[styles.welcomePattern, { backgroundColor: colors.primary + '12' }]} />
             </View>
-            <View>
-              <Text style={[styles.logoText, { color: isDark ? '#fff' : Colors.slate[800] }]}>
-                Heal<Text style={{ color: Colors.teal[600] }}>AI</Text>
-              </Text>
-              <Text style={[styles.logoSub, { color: isDark ? Colors.slate[500] : Colors.slate[400] }]}>
-                Health Intelligence
-              </Text>
-            </View>
-          </View>
+          </GlassCard>
         </Animated.View>
 
-        {/* Hero Section */}
-        <Animated.View entering={FadeInDown.delay(100).duration(700)} style={styles.heroSection}>
-          <View style={[styles.bannerContainer, { borderColor: isDark ? '#27272a' : '#e4e4e7' }]}>
-            <Image
-              source={require('../../../assets/images/healthcare_banner.png')}
-              style={styles.bannerImage}
-              resizeMode="cover"
+        {/* ONE Primary CTA: Start health check & Latest Report */}
+        <Animated.View entering={FadeInDown.delay(100).duration(500)} style={{ marginBottom: 20, flexDirection: 'row', gap: 10 }}>
+          <View style={{ flex: 1.4 }}>
+            <GradientButton
+              label={t('startCheck')}
+              onPress={() => router.push('/symptoms')}
+              icon="stethoscope"
+              fullWidth
             />
           </View>
-
-          <Chip
-            mode="flat"
-            style={[styles.trustChip, { backgroundColor: isDark ? 'rgba(13,148,136,0.15)' : Colors.teal[50] }]}
-            textStyle={{ color: Colors.teal[700], fontSize: 11, fontWeight: '600' }}
-            icon={() => <View style={styles.chipDot} />}
+          <TouchableOpacity
+            onPress={async () => {
+              const latest = await AsyncStorage.getItem('latest_analysis');
+              if (latest) {
+                router.push('/doc-report');
+              } else {
+                alert('No recent report found. Run a check first!');
+              }
+            }}
+            style={{
+              flex: 1,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderWidth: 1,
+              borderColor: colors.primary,
+              borderRadius: 24,
+              paddingHorizontal: 12,
+              height: 48,
+              gap: 6
+            }}
           >
-            Trusted by healthcare professionals
-          </Chip>
-
-          <Text style={[styles.heroTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>
-            {t('welcome')}
-          </Text>
-
-          <View style={styles.typewriterContainer}>
-            <Text style={[styles.typewriterText, { color: isDark ? Colors.slate[400] : Colors.slate[500] }]}>
-              {typewriterText}
-              <Text style={{ color: Colors.teal[500] }}>|</Text>
-            </Text>
-          </View>
-
-          <Text style={[styles.heroSubtitle, { color: isDark ? Colors.slate[400] : Colors.slate[500] }]}>
-            {t('subWelcome')}
-          </Text>
-
-          <View style={styles.heroCTAs}>
-            <Button
-              mode="contained"
-              onPress={() => router.push('/symptoms')}
-              style={styles.primaryBtn}
-              labelStyle={styles.primaryBtnLabel}
-              contentStyle={{ paddingVertical: 6 }}
-              icon="arrow-right"
-            >
-              {t('checkSymptomsBtn')}
-            </Button>
-            <Button
-              mode="outlined"
-              onPress={() => router.push('/chat')}
-              style={[styles.secondaryBtn, { borderColor: isDark ? Colors.slate[600] : Colors.slate[300] }]}
-              labelStyle={[styles.secondaryBtnLabel, { color: isDark ? Colors.slate[300] : Colors.slate[700] }]}
-              contentStyle={{ paddingVertical: 6 }}
-            >
-              {t('chatBotBtn')}
-            </Button>
-          </View>
-
-          {/* Trust Badges */}
-          <View style={styles.trustBadges}>
-            {[
-              { icon: 'shield-check', label: 'HIPAA Compliant' },
-              { icon: 'clock', label: '24/7 Available' },
-              { icon: 'account-group', label: '10M+ Users' },
-            ].map((badge, i) => (
-              <View key={i} style={styles.trustBadge}>
-                <MaterialCommunityIcons name={badge.icon as any} size={13} color={isDark ? Colors.slate[500] : Colors.slate[400]} />
-                <Text style={[styles.trustBadgeText, { color: isDark ? Colors.slate[500] : Colors.slate[400] }]}>
-                  {badge.label}
-                </Text>
-              </View>
-            ))}
-          </View>
+            <MaterialCommunityIcons name="file-document-outline" size={18} color={colors.primary} />
+            <AppText variant="caption" color={colors.primary} style={{ fontWeight: '700' }}>{t('latestReport')}</AppText>
+          </TouchableOpacity>
         </Animated.View>
 
-        {/* Daily Insight */}
-        {insight && !insightLoading && (
-          <Animated.View entering={FadeInDown.delay(200).duration(600)} style={styles.sectionPadding}>
-            <Card style={[styles.insightCard, { backgroundColor: isDark ? '#18181b' : Colors.teal[50] }]} mode="contained">
-              <View style={[styles.insightTopBar, { backgroundColor: Colors.teal[600] }]} />
-              <Card.Content style={styles.insightContent}>
-                <View style={styles.insightHeader}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <MaterialCommunityIcons name="lightbulb" size={18} color={Colors.teal[600]} />
-                    <Text style={[styles.insightLabel, { color: isDark ? '#fff' : Colors.slate[800] }]}>Daily Health Insight</Text>
+        {/* Outbreak Radar alerts warning banner */}
+        {isAshaWorker && outbreaks.length > 0 && (
+          <Animated.View entering={FadeInDown.delay(150).duration(500)} style={{ marginBottom: 16 }}>
+            <TouchableOpacity onPress={() => router.push('/chw-dashboard')}>
+              <Surface style={[styles.ashaBanner, { backgroundColor: isDark ? 'rgba(239, 68, 68, 0.12)' : '#fef2f2', borderColor: colors.danger, borderWidth: 1 }]} elevation={2}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <MaterialCommunityIcons name="alert-decagram" size={24} color={colors.danger} />
+                  <View style={{ flex: 1 }}>
+                    <AppText variant="caption" color={colors.danger} style={{ fontWeight: '900' }}>🚨 AI OUTBREAK RADAR ALERT</AppText>
+                    <AppText variant="micro" color={isDark ? colors.text : Colors.slate[700]} style={{ marginTop: 2, fontWeight: '700' }}>
+                      {outbreaks.map(o => `${o.count}+ cases of ${o.symptom}`).join(', ')} detected in Delhi Village A!
+                    </AppText>
                   </View>
-                  <Chip
-                    mode="flat"
-                    compact
-                    style={{ backgroundColor: categoryColors[insight.category]?.bg || (isDark ? Colors.teal[900] : Colors.teal[100]) }}
-                    textStyle={{ color: categoryColors[insight.category]?.text || Colors.teal[700], fontSize: 10, fontWeight: '600' }}
-                  >
-                    {insight.category}
-                  </Chip>
+                  <MaterialCommunityIcons name="chevron-right" size={20} color={colors.danger} />
                 </View>
-                <Text style={[styles.insightTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{insight.title}</Text>
-                <Text style={[styles.insightBody, { color: isDark ? Colors.slate[300] : Colors.slate[600] }]}>{insight.content}</Text>
-                {insight.tips.map((tip, i) => (
-                  <View key={i} style={styles.tipRow}>
-                    <Text style={{ color: Colors.teal[500], fontWeight: '700' }}>•</Text>
-                    <Text style={[styles.tipText, { color: isDark ? Colors.slate[300] : Colors.slate[600] }]}>{tip}</Text>
-                  </View>
-                ))}
-                <Surface style={[styles.motivationBox, { backgroundColor: isDark ? '#27272a' : '#ecfdf5' }]} elevation={0}>
-                  <MaterialCommunityIcons name="heart" size={14} color={Colors.teal[600]} />
-                  <Text style={[styles.motivationText, { color: isDark ? Colors.teal[300] : Colors.teal[700] }]}>{insight.motivation}</Text>
-                </Surface>
-              </Card.Content>
-            </Card>
+              </Surface>
+            </TouchableOpacity>
           </Animated.View>
         )}
 
-        {/* Stats Bar */}
-        <Animated.View entering={FadeInDown.delay(300).duration(600)} style={styles.statsSection}>
-          <Surface style={[styles.statsBar, { backgroundColor: isDark ? '#121214' : '#fff' }]} elevation={1}>
-            {STATS.map((stat, i) => (
-              <View key={i} style={styles.statItem}>
-                <View style={[styles.statIcon, { backgroundColor: isDark ? 'rgba(13,148,136,0.15)' : Colors.teal[50] }]}>
-                  <MaterialCommunityIcons name={stat.icon as any} size={18} color={Colors.teal[600]} />
+        {/* Caregiver ASHA Worker Dashboard Banner */}
+        {isAshaWorker && outbreaks.length === 0 && (
+          <Animated.View entering={FadeInDown.delay(150).duration(500)} style={{ marginBottom: 16 }}>
+            <Surface style={[styles.ashaBanner, { backgroundColor: isDark ? 'rgba(99,102,241,0.1)' : '#eef2ff', borderColor: colors.border, borderWidth: 1 }]} elevation={0}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View style={{ flex: 1 }}>
+                  <AppText variant="caption" style={{ fontWeight: '800' }}>ASHA Dashboard Active</AppText>
+                  <AppText variant="micro" color={colors.textMuted}>View triage registries & outbreak radar</AppText>
                 </View>
-                <Text style={[styles.statValue, { color: isDark ? '#fff' : Colors.slate[800] }]}>{stat.value}</Text>
-                <Text style={[styles.statLabel, { color: isDark ? Colors.slate[500] : Colors.slate[500] }]}>{stat.label}</Text>
+                <TouchableOpacity onPress={() => router.push('/chw-dashboard')} style={[styles.ashaActionBtn, { backgroundColor: colors.primary }]}>
+                  <AppText variant="micro" color="#fff" style={{ fontWeight: '800' }}>Open</AppText>
+                </TouchableOpacity>
               </View>
-            ))}
-          </Surface>
+            </Surface>
+          </Animated.View>
+        )}
+
+        {/* Daily Insight Banner */}
+        <Animated.View entering={FadeInDown.delay(200).duration(500)} style={{ marginBottom: 20 }}>
+          <GlassCard style={{ borderColor: colors.border }}>
+            <View style={styles.insightHeader}>
+              <View style={[styles.insightBadge, { backgroundColor: colors.tertiary + '20' }]}>
+                <MaterialCommunityIcons name="creation" size={14} color={colors.tertiary} />
+              </View>
+              <AppText variant="mono" color={colors.tertiary}>DAILY INSIGHT</AppText>
+            </View>
+            <AppText variant="body" style={{ marginTop: 6, lineHeight: 22 }}>
+              Staying hydrated in hot weather helps prevent fatigue and dizziness. Aim for 8 glasses of water today.
+            </AppText>
+          </GlassCard>
         </Animated.View>
 
-        {/* Features Grid */}
-        <View style={styles.sectionPadding}>
-          <Text style={[styles.sectionTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>
-            {t('everythingYouNeed')}
-          </Text>
-          <Text style={[styles.sectionSubtitle, { color: isDark ? Colors.slate[400] : Colors.slate[500] }]}>
-            {t('comprehensiveTools')}
-          </Text>
-          <View style={styles.featuresGrid}>
-            {FEATURES.map((feature, i) => (
-              <Animated.View key={i} entering={FadeInDown.delay(400 + i * 80).duration(500)} style={styles.featureCardWrapper}>
-                <TouchableOpacity
-                  activeOpacity={0.7}
-                  onPress={() => handleFeaturePress(feature.route)}
-                  style={[styles.featureCard, { backgroundColor: isDark ? '#121214' : '#fff', borderColor: isDark ? '#27272a' : Colors.slate[200] }]}
-                >
-                  <View style={[styles.featureIcon, { backgroundColor: feature.color + '15' }]}>
-                    <MaterialCommunityIcons name={feature.icon as any} size={22} color={feature.color} />
+        {/* Quick Access Grid */}
+        <AppText variant="title" style={styles.sectionHeading}>{t('quickAccess')}</AppText>
+        <View style={styles.gridContainer}>
+          {QUICK_ACCESS_ITEMS.map((item, idx) => (
+            <Animated.View key={idx} entering={FadeInDown.delay(250 + idx * 50).duration(400)} style={{ width: (width - 44) / 2 }}>
+              <PressableScale onPress={() => handleQuickAccess(item.route)} style={{ width: '100%' }}>
+                <GlassCard style={styles.gridCard}>
+                  <View style={[styles.gridIconBox, { backgroundColor: item.color + '18' }]}>
+                    <MaterialCommunityIcons name={item.icon as any} size={22} color={item.color} />
                   </View>
-                  <Text style={[styles.featureTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>
-                    {t(feature.title === 'Symptoms' ? 'symptoms' : feature.title === 'AI Chatbot' ? 'chat' : feature.title === 'Reports' ? 'reports' : feature.title === 'Find Clinics' ? 'nearbyHospitalsTitle' : feature.title === 'Education' ? 'educationHub' : 'emergencyCall')}
-                  </Text>
-                  <Text style={[styles.featureDesc, { color: isDark ? Colors.slate[400] : Colors.slate[500] }]}>
-                    {t(feature.title === 'Symptoms' ? 'symptomCheckerDesc' : feature.title === 'AI Chatbot' ? 'healthChatbotDesc' : feature.title === 'Reports' ? 'healthReportsDesc' : feature.title === 'Find Clinics' ? 'nearbyHospitalsDesc' : feature.title === 'Education' ? 'educationHubDesc' : 'emergencyCallDesc')}
-                  </Text>
-                </TouchableOpacity>
-              </Animated.View>
-            ))}
-          </View>
-        </View>
-
-        {/* How It Works */}
-        <View style={[styles.sectionPadding, { paddingBottom: 32 }]}>
-          <Text style={[styles.sectionTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{t('howItWorks')}</Text>
-          {[
-            { step: '01', titleKey: 'step1Title', descKey: 'step1Desc', icon: 'clipboard-text' },
-            { step: '02', titleKey: 'step2Title', descKey: 'step2Desc', icon: 'brain' },
-            { step: '03', titleKey: 'step3Title', descKey: 'step3Desc', icon: 'lightning-bolt' },
-          ].map((item, i) => (
-            <Animated.View key={i} entering={FadeInDown.delay(700 + i * 100).duration(500)}>
-              <Surface style={[styles.stepCard, { backgroundColor: isDark ? '#121214' : '#fff' }]} elevation={1}>
-                <View style={[styles.stepBadge, { backgroundColor: isDark ? Colors.slate[800] : Colors.slate[900] }]}>
-                  <Text style={styles.stepBadgeText}>{item.step}</Text>
-                </View>
-                <View style={[styles.stepIconBox, { backgroundColor: isDark ? 'rgba(13,148,136,0.15)' : Colors.teal[50] }]}>
-                  <MaterialCommunityIcons name={item.icon as any} size={24} color={Colors.teal[600]} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.stepTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{t(item.titleKey)}</Text>
-                  <Text style={[styles.stepDesc, { color: isDark ? Colors.slate[400] : Colors.slate[500] }]}>{t(item.descKey)}</Text>
-                </View>
-              </Surface>
+                  <AppText variant="body" style={{ fontWeight: '700' }}>{item.label === 'Symptom Checker' ? t('symptomCheckerTitle') : item.label === 'Report Scanner' ? t('reportScanner') : item.label === 'Health Chat' ? t('chat') : item.label === 'AI Nurse Call' ? t('aiNurseCall') : item.label === 'Case History' ? 'Case History' : item.label}</AppText>
+                </GlassCard>
+              </PressableScale>
             </Animated.View>
           ))}
         </View>
 
-        {/* CTA */}
-        <Animated.View entering={FadeInDown.delay(900).duration(500)} style={styles.sectionPadding}>
-          <Surface style={styles.ctaCard} elevation={2}>
-            <Text style={styles.ctaTitle}>Ready to Take Control?</Text>
-            <Text style={styles.ctaSubtitle}>Join millions who trust HealAI for their health journey.</Text>
-            <Button
-              mode="contained"
-              onPress={() => router.push('/symptoms')}
-              style={styles.ctaBtn}
-              labelStyle={{ fontWeight: '700', fontSize: 15 }}
-              contentStyle={{ paddingVertical: 6 }}
-              icon="arrow-right"
-            >
-              Get Started Free
-            </Button>
-          </Surface>
-        </Animated.View>
+        {/* Skin & Self-Care Guidance Carousel */}
+        <AppText variant="title" style={styles.sectionHeading}>{t('skinSelfCareTips')}</AppText>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ gap: 12, paddingBottom: 8 }}
+          style={{ marginBottom: 12 }}
+        >
+          <GlassCard padded={false} style={{ width: 260, borderColor: colors.border }}>
+            <View style={{ padding: 16 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <View style={{ backgroundColor: colors.secondary + '18', padding: 6, borderRadius: 8 }}>
+                  <MaterialCommunityIcons name="water-percent" size={20} color={colors.secondary} />
+                </View>
+                <AppText variant="body" style={{ fontWeight: '800' }}>{t('stayHydrated')}</AppText>
+              </View>
+              <AppText variant="caption" color={colors.textMuted} style={{ lineHeight: 18 }}>
+                Dehydration often causes dry, itchy skin or flaky patches. Drinking 2-3 liters of water daily helps maintain a healthy skin barrier.
+              </AppText>
+            </View>
+          </GlassCard>
 
-        {/* Footer */}
-        <View style={[styles.footer, { borderTopColor: isDark ? Colors.slate[800] : Colors.slate[200] }]}>
-          <Text style={[styles.footerText, { color: isDark ? Colors.slate[500] : Colors.slate[400] }]}>
-            © 2026 HealAI. All rights reserved.
-          </Text>
+          <GlassCard padded={false} style={{ width: 260, borderColor: colors.border }}>
+            <View style={{ padding: 16 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <View style={{ backgroundColor: colors.primary + '18', padding: 6, borderRadius: 8 }}>
+                  <MaterialCommunityIcons name="shield-check-outline" size={20} color={colors.primary} />
+                </View>
+                <AppText variant="body" style={{ fontWeight: '800' }}>{t('sunProtection')}</AppText>
+              </View>
+              <AppText variant="caption" color={colors.textMuted} style={{ lineHeight: 18 }}>
+                Prevent premature aging and UV damage by wearing protective clothing or sunscreen when out in the sun.
+              </AppText>
+            </View>
+          </GlassCard>
+
+          <GlassCard padded={false} style={{ width: 260, borderColor: colors.border }}>
+            <View style={{ padding: 16 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <View style={{ backgroundColor: Colors.amber[500] + '18', padding: 6, borderRadius: 8 }}>
+                  <MaterialCommunityIcons name="face-man-profile" size={20} color={Colors.amber[600]} />
+                </View>
+                <AppText variant="body" style={{ fontWeight: '800' }}>{t('barrierCare')}</AppText>
+              </View>
+              <AppText variant="caption" color={colors.textMuted} style={{ lineHeight: 18 }}>
+                Avoid using harsh soaps or scrubs. Gentle cleansers keep the pH level of the skin balanced and prevent sudden breakouts or redness.
+              </AppText>
+            </View>
+          </GlassCard>
+        </ScrollView>
+
+        {/* Timeline list header */}
+        <View style={styles.timelineHeaderRow}>
+          <AppText variant="title" style={{ fontWeight: '800' }}>{t('yourTimeline')}</AppText>
+          <TouchableOpacity onPress={() => router.push('/chat')}>
+            <AppText variant="caption" color={colors.primary} style={{ fontWeight: '700' }}>Nurse call &rsaquo;</AppText>
+          </TouchableOpacity>
         </View>
+
+        {timelineData.length === 0 ? (
+          <GlassCard style={styles.emptyTimeline}>
+            <MaterialCommunityIcons name="clipboard-text-outline" size={28} color={colors.textMuted} />
+            <AppText variant="caption" color={colors.textMuted} style={{ marginTop: 8 }}>No clinical checks recorded yet.</AppText>
+          </GlassCard>
+        ) : (
+          <View style={styles.timelineList}>
+            {timelineData.slice(0, 5).map((item, index) => {
+              const primarySymptom = item.data?.symptoms?.[0] || 'Health Intake';
+              const extraCount = (item.data?.symptoms?.length || 0) > 1 ? `, +${item.data.symptoms.length - 1}` : '';
+              const timeAgoStr = getTimeAgo(item.date);
+              const urgencyLevel = item.result?.urgencyLevel?.level || 'Routine';
+              
+              // Map urgency level string to level number for EsiBadge
+              let levelNum: 1 | 2 | 3 | 4 | 5 = 5;
+              if (urgencyLevel === 'Emergency') levelNum = 1;
+              else if (urgencyLevel === 'Urgent') levelNum = 2;
+              else if (urgencyLevel === 'Soon') levelNum = 3;
+              else if (urgencyLevel === 'Low') levelNum = 4;
+              
+              const badgeColors = esi[levelNum];
+
+              return (
+                <Animated.View key={item.id || index} entering={FadeInDown.delay(300 + index * 60).duration(400)}>
+                  <View style={styles.timelineRow}>
+                    {/* Timeline connector node */}
+                    <View style={styles.timelineConnector}>
+                      <View style={[styles.timelineDot, { backgroundColor: badgeColors.primary }]}>
+                        <MaterialCommunityIcons name="stethoscope" size={12} color="#fff" />
+                      </View>
+                      {index < timelineData.length - 1 && (
+                        <View style={[styles.timelineLine, { backgroundColor: colors.border }]} />
+                      )}
+                    </View>
+
+                    {/* Timeline content card */}
+                    <GlassCard padded={false} style={styles.timelineCard}>
+                      <View style={{ padding: 14 }}>
+                        <View style={styles.timelineCardHeader}>
+                          <AppText variant="body" style={{ fontWeight: '800', flex: 1 }}>
+                            {primarySymptom}{extraCount}
+                          </AppText>
+                          <EsiBadge level={levelNum} size="pill" />
+                        </View>
+
+                        <AppText variant="caption" color={colors.textMuted} numberOfLines={2} style={{ marginTop: 4, lineHeight: 18 }}>
+                          {item.result?.conditions?.[0]?.description || 'Intake summary recorded matching clinical rules.'}
+                        </AppText>
+                        <AppText variant="micro" color={colors.textMuted} style={{ marginTop: 8, fontWeight: '600' }}>{timeAgoStr}</AppText>
+                      </View>
+                    </GlassCard>
+                  </View>
+                </Animated.View>
+              );
+            })}
+          </View>
+        )}
       </ScrollView>
 
       {/* Emergency FAB */}
-      <Animated.View style={[styles.fabContainer, pulseStyle]}>
-        <FAB
-          icon="phone"
-          color="#fff"
-          style={styles.emergencyFab}
-          onPress={() => Linking.openURL('tel:112')}
-          label=""
-          size="small"
-        />
-      </Animated.View>
+      <TouchableOpacity
+        style={[styles.emergencyFab, { backgroundColor: colors.danger }]}
+        activeOpacity={0.85}
+        onPress={() => Linking.openURL('tel:112')}
+      >
+        <MaterialCommunityIcons name="phone-alert" size={24} color="#fff" />
+      </TouchableOpacity>
+
+      {/* Location Selector Dialog */}
+      <Portal>
+        <Dialog visible={locationModalVisible} onDismiss={() => setLocationModalVisible(false)} style={{ backgroundColor: colors.surface, borderRadius: 20 }}>
+          <Dialog.Title style={{ color: colors.text }}>{t('changeLocation')}</Dialog.Title>
+          <Dialog.Content style={{ gap: 14 }}>
+            <AppText variant="caption" color={colors.textMuted}>
+              Setting your village or location allows the Outbreak Radar to accurately detect localized clusters.
+            </AppText>
+            <TextInput
+              label="Village or Address"
+              value={newLocationText}
+              onChangeText={setNewLocationText}
+              mode="outlined"
+              activeOutlineColor={colors.primary}
+              outlineColor={colors.border}
+              style={{ backgroundColor: colors.surface }}
+              textColor={colors.text}
+              right={
+                <TextInput.Icon 
+                  icon={detectingLocation ? "loading" : "map-marker-radius"} 
+                  color={colors.primary}
+                  onPress={detectGPSLocation}
+                  disabled={detectingLocation}
+                />
+              }
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <TouchableOpacity onPress={() => setLocationModalVisible(false)} style={{ paddingHorizontal: 12, paddingVertical: 8 }}>
+              <AppText variant="caption" color={colors.textMuted} style={{ fontWeight: '700' }}>Cancel</AppText>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => saveLocation(newLocationText)} style={{ paddingHorizontal: 12, paddingVertical: 8, marginLeft: 8 }}>
+              <AppText variant="caption" color={colors.primary} style={{ fontWeight: '800' }}>Save</AppText>
+            </TouchableOpacity>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
-  logoRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  logoIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: Colors.teal[600], justifyContent: 'center', alignItems: 'center' },
-  logoText: { fontSize: 20, fontWeight: '900', letterSpacing: -0.5 },
-  logoSub: { fontSize: 9, fontWeight: '500', letterSpacing: 2, textTransform: 'uppercase', marginTop: -1 },
-  heroSection: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 24, alignItems: 'center' },
-  bannerContainer: { width: '100%', height: 160, borderRadius: 24, overflow: 'hidden', borderWidth: 1, marginBottom: 24, backgroundColor: '#000' },
-  bannerImage: { width: '100%', height: '100%' },
-  trustChip: { borderRadius: 20, marginBottom: 20, borderWidth: 0.5, borderColor: Colors.teal[200] },
-  chipDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.teal[500] },
-  heroTitle: { fontSize: 34, fontWeight: '800', textAlign: 'center', lineHeight: 42, letterSpacing: -1 },
-  typewriterContainer: { height: 32, justifyContent: 'center', marginTop: 12, marginBottom: 8 },
-  typewriterText: { fontSize: 17, fontWeight: '300' },
-  heroSubtitle: { fontSize: 15, textAlign: 'center', lineHeight: 22, marginBottom: 24, paddingHorizontal: 8 },
-  heroCTAs: { flexDirection: 'row', gap: 12, marginBottom: 24 },
-  primaryBtn: { borderRadius: 28, backgroundColor: Colors.teal[600], elevation: 3 },
-  primaryBtnLabel: { fontWeight: '700', fontSize: 14, color: '#fff' },
-  secondaryBtn: { borderRadius: 28 },
-  secondaryBtnLabel: { fontWeight: '600', fontSize: 14 },
-  trustBadges: { flexDirection: 'row', gap: 16, marginTop: 4 },
-  trustBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  trustBadgeText: { fontSize: 11 },
-  sectionPadding: { paddingHorizontal: 20, marginBottom: 16 },
-  insightCard: { borderRadius: 20, overflow: 'hidden' },
-  insightTopBar: { height: 3, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
-  insightContent: { paddingVertical: 16 },
-  insightHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  insightLabel: { fontWeight: '700', fontSize: 15 },
-  insightTitle: { fontSize: 18, fontWeight: '700', marginBottom: 8 },
-  insightBody: { fontSize: 13, lineHeight: 20, marginBottom: 12 },
-  tipRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 4 },
-  tipText: { fontSize: 13, flex: 1, lineHeight: 18 },
-  motivationBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 12, marginTop: 12 },
-  motivationText: { fontSize: 13, fontWeight: '600', flex: 1 },
-  statsSection: { paddingHorizontal: 20, marginBottom: 24 },
-  statsBar: { borderRadius: 20, padding: 16, flexDirection: 'row', justifyContent: 'space-around' },
-  statItem: { alignItems: 'center', gap: 4 },
-  statIcon: { width: 36, height: 36, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-  statValue: { fontSize: 18, fontWeight: '800' },
-  statLabel: { fontSize: 10 },
-  sectionTitle: { fontSize: 22, fontWeight: '800', marginBottom: 4, textAlign: 'center' },
-  sectionSubtitle: { fontSize: 14, textAlign: 'center', marginBottom: 20 },
-  featuresGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  featureCardWrapper: { width: (width - 52) / 2 },
-  featureCard: { padding: 16, borderRadius: 16, borderWidth: 0.5 },
-  featureIcon: { width: 44, height: 44, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
-  featureTitle: { fontSize: 15, fontWeight: '700', marginBottom: 4 },
-  featureDesc: { fontSize: 12, lineHeight: 16 },
-  stepCard: { borderRadius: 16, padding: 16, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  stepBadge: { position: 'absolute', top: -6, right: -6, width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center', zIndex: 1 },
-  stepBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
-  stepIconBox: { width: 48, height: 48, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  stepTitle: { fontSize: 15, fontWeight: '700', marginBottom: 2 },
-  stepDesc: { fontSize: 12, lineHeight: 16 },
-  ctaCard: { borderRadius: 24, padding: 32, alignItems: 'center', backgroundColor: Colors.teal[600] },
-  ctaTitle: { fontSize: 22, fontWeight: '800', color: '#fff', textAlign: 'center', marginBottom: 8 },
-  ctaSubtitle: { fontSize: 14, color: 'rgba(255,255,255,0.75)', textAlign: 'center', marginBottom: 24 },
-  ctaBtn: { borderRadius: 28, backgroundColor: '#fff' },
-  footer: { padding: 20, borderTopWidth: 0.5, alignItems: 'center', marginTop: 12, marginBottom: 8 },
-  footerText: { fontSize: 12, fontWeight: '500' },
-  footerDisclaimer: { fontSize: 10, marginTop: 4, textAlign: 'center' },
-  fabContainer: { position: 'absolute', bottom: 80, right: 20 },
-  emergencyFab: { backgroundColor: Colors.rose[600], borderRadius: 28, elevation: 8 },
+  container: {
+    flex: 1,
+  },
+  navHeader: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 0.5,
+  },
+  navRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  logoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  logoIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  navLanguage: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  navProfile: {
+    padding: 2,
+  },
+  welcomeCard: {
+    borderWidth: 0,
+    borderRadius: 20,
+    elevation: 0,
+  },
+  welcomeGradient: {
+    padding: 20,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  welcomeInfo: {
+    flex: 1,
+    zIndex: 2,
+  },
+  welcomePattern: {
+    position: 'absolute',
+    right: -20,
+    top: -20,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    zIndex: 1,
+  },
+  ashaBanner: {
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  ashaActionBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  insightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  insightBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sectionHeading: {
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 12,
+  },
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 20,
+  },
+  gridCard: {
+    padding: 14,
+    borderRadius: 16,
+    alignItems: 'flex-start',
+    width: '100%',
+  },
+  gridIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  timelineHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  emptyTimeline: {
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timelineList: {
+    marginTop: 4,
+  },
+  timelineRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 14,
+  },
+  timelineConnector: {
+    width: 24,
+    alignItems: 'center',
+  },
+  timelineDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  timelineLine: {
+    flex: 1,
+    width: 2,
+    marginVertical: 4,
+  },
+  timelineCard: {
+    flex: 1,
+    borderRadius: 16,
+  },
+  timelineCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  emergencyFab: {
+    position: 'absolute',
+    bottom: 100,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 8,
+    zIndex: 100,
+  },
 });

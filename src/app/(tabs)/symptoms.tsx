@@ -1,18 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, ScrollView, StyleSheet, useColorScheme, TouchableOpacity, Alert, Share, Image, Platform,
 } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import {
-  Text, Surface, Button, TextInput, Chip, ProgressBar, Card, Divider, ActivityIndicator, useTheme,
+  Text, Surface, Button, TextInput, Chip, ProgressBar, Card, Divider, useTheme, ActivityIndicator,
 } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
-import { Colors } from '../../theme';
+import { useHealTheme, Colors } from '../../theme';
 import { analyzeSymptomsWithGemini, AnalysisResponse, AnalysisData } from '../../services/symptomCheckerService';
+import { generateSOAPNote, SOAPNote } from '../../services/soapService';
+import { saveSymptomCheckToNeo4j } from '../../services/neo4jService';
 import { useTranslation } from '../../localization';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router } from 'expo-router';
+import * as Location from 'expo-location';
+
+// UI Primitives
+import { AppText } from '../../components/ui/AppText';
+import { GradientButton } from '../../components/ui/GradientButton';
+import { GlassCard } from '../../components/ui/GlassCard';
+import { EsiBadge } from '../../components/ui/EsiBadge';
+import { PressableScale } from '../../components/ui/PressableScale';
+import { StateView } from '../../components/ui/StateView';
 
 type BodyPartId = 'head' | 'eyes' | 'ears' | 'nose' | 'mouth' | 'neck' | 'chest' | 'shoulders' | 'abdomen' | 'digestive' | 'respiratory' | 'upper_back' | 'lower_back' | 'arms' | 'elbows' | 'wrists' | 'hips' | 'legs' | 'knees' | 'ankles' | 'skin' | 'joints' | 'urinary' | 'general';
 
@@ -112,12 +125,71 @@ const URGENCY_COLORS: Record<string, { bg: string; text: string; icon: string }>
 export default function SymptomsScreen() {
   const SHOW_DISCLAIMERS = false;
   const { t, locale } = useTranslation();
-  const theme = useTheme();
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const { isDark, colors, spacing, radii, typeScale } = useHealTheme();
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AnalysisResponse | null>(null);
+  const [soapNote, setSoapNote] = useState<SOAPNote | null>(null);
+  const [soapLoading, setSoapLoading] = useState(false);
+  const [showSoap, setShowSoap] = useState(false);
+  const [age, setAge] = useState('');
+  const [gender, setGender] = useState('Rather not say');
+  const [patientName, setPatientName] = useState('');
+  const [patientAddress, setPatientAddress] = useState('');
+  const [detectingLocation, setDetectingLocation] = useState(false);
+
+  const handleDetectLocation = async () => {
+    setDetectingLocation(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Permission to access location was denied');
+        return;
+      }
+
+      const loc = await Location.getCurrentPositionAsync({});
+      const geocode = await Location.reverseGeocodeAsync({
+        latitude: loc.coords.latitude,
+        longitude: loc.coords.longitude,
+      });
+
+      if (geocode && geocode.length > 0) {
+        const address = geocode[0];
+        const formattedAddress = [
+          address.name,
+          address.street,
+          address.district,
+          address.city,
+          address.region,
+          address.country,
+        ].filter(Boolean).join(', ');
+        setPatientAddress(formattedAddress || `${loc.coords.latitude}, ${loc.coords.longitude}`);
+      } else {
+        setPatientAddress(`${loc.coords.latitude}, ${loc.coords.longitude}`);
+      }
+    } catch (err) {
+      console.warn('Failed to detect location:', err);
+      Alert.alert('Location Error', 'Failed to auto-detect location. Please type manually.');
+    } finally {
+      setDetectingLocation(false);
+    }
+  };
+
+  useEffect(() => {
+    async function loadSessionData() {
+      try {
+        const sessionStr = await AsyncStorage.getItem('user_session');
+        if (sessionStr) {
+          const session = JSON.parse(sessionStr);
+          if (session.name) setPatientName(session.name);
+          if (session.address) setPatientAddress(session.address);
+        }
+      } catch (err) {
+        console.warn('Failed to load prefilled session details:', err);
+      }
+    }
+    loadSessionData();
+  }, []);
 
   const getLanguageName = () => {
     switch (locale) {
@@ -180,20 +252,37 @@ export default function SymptomsScreen() {
       Alert.alert('No Symptoms', 'Please select at least one symptom.');
       return;
     }
+    if (Platform.OS === 'web') {
+      (document.activeElement as HTMLElement)?.blur();
+    }
     setLoading(true);
     try {
       const data: AnalysisData = {
         symptoms,
         severity,
         duration,
+        age: age || undefined,
+        gender: gender || undefined,
         medicalHistory: { conditions, medications, allergies },
         lifestyle,
         recentChanges,
         familyHistory: [],
+        patientName: patientName || undefined,
+        patientAddress: patientAddress || undefined,
       };
       const res = await analyzeSymptomsWithGemini(data, getLanguageName());
       setResult(res);
-      setStep(totalSteps);
+
+      // Save to AsyncStorage for the multi-screen flow
+      await AsyncStorage.setItem('latest_analysis', JSON.stringify({ data, result: res }));
+
+      // Save to Neo4j Aura DB (non-blocking)
+      saveSymptomCheckToNeo4j(data, res).catch(err =>
+        console.warn('[Symptoms] Neo4j save failed (non-blocking):', err)
+      );
+
+      // Navigate to the new multi-screen diagnosis flow
+      router.push('/diagnosis-result');
     } catch (e) {
       Alert.alert('Error', 'Failed to analyze symptoms. Please try again.');
     } finally {
@@ -342,13 +431,7 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
 
     try {
       if (Platform.OS === 'web') {
-        const { uri } = await Print.printToFileAsync({ html: htmlContent });
-        const link = document.createElement('a');
-        link.href = uri;
-        link.download = 'HealAI_Medical_Report.pdf';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        await Print.printAsync({ html: htmlContent });
       } else {
         const { uri } = await Print.printToFileAsync({ html: htmlContent });
         await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Download Medical Report' });
@@ -359,9 +442,118 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
     }
   };
 
+  const handleGenerateSOAP = async () => {
+    if (!result) return;
+    if (Platform.OS === 'web') {
+      (document.activeElement as HTMLElement)?.blur();
+    }
+    setSoapLoading(true);
+    setShowSoap(true);
+    try {
+      const data: AnalysisData = {
+        symptoms,
+        severity,
+        duration,
+        medicalHistory: { conditions, medications, allergies },
+        lifestyle,
+        recentChanges,
+        familyHistory: [],
+      };
+      const note = await generateSOAPNote(data, result, getLanguageName());
+      setSoapNote(note);
+    } catch (e) {
+      Alert.alert('SOAP Error', 'Could not generate SOAP note. Please try again.');
+      setShowSoap(false);
+    } finally {
+      setSoapLoading(false);
+    }
+  };
+
+  const handleDownloadSOAP = async () => {
+    if (!soapNote) return;
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>SOAP Note - Clinical Documentation</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; color: #1e293b; background-color: #ffffff; line-height: 1.6; }
+          .header { border-bottom: 2px solid #e2e8f0; padding-bottom: 20px; margin-bottom: 30px; }
+          .title { font-size: 26px; font-weight: 800; color: #0f172a; margin: 0; text-transform: uppercase; letter-spacing: 0.5px; }
+          .subtitle { font-size: 13px; color: #64748b; font-weight: 600; margin: 5px 0 0 0; }
+          .meta-info { font-size: 12px; color: #94a3b8; margin-top: 15px; }
+          .section { margin-bottom: 25px; padding-left: 15px; }
+          .section-S { border-left: 4px solid #3b82f6; }
+          .section-O { border-left: 4px solid #10b981; }
+          .section-A { border-left: 4px solid #f59e0b; }
+          .section-P { border-left: 4px solid #8b5cf6; }
+          .section-header { font-size: 16px; font-weight: 800; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+          .header-S { color: #2563eb; }
+          .header-O { color: #059669; }
+          .header-A { color: #d97706; }
+          .header-P { color: #7c3aed; }
+          .content { font-size: 14px; color: #334155; white-space: pre-wrap; }
+          .footer { margin-top: 50px; border-top: 1px solid #e2e8f0; padding-top: 15px; font-size: 10px; color: #94a3b8; text-align: center; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1 class="title">Clinical SOAP Note</h1>
+          <p class="subtitle">HealAI Clinic Assistant • Deterministic Reasoning (T=0.0)</p>
+          <div class="meta-info">
+            Generated: ${new Date(soapNote.generatedAt).toLocaleString()}
+          </div>
+        </div>
+        
+        <div class="section section-S">
+          <div class="section-header header-S">S: Subjective</div>
+          <div class="content">${soapNote.subjective}</div>
+        </div>
+        
+        <div class="section section-O">
+          <div class="section-header header-O">O: Objective</div>
+          <div class="content">${soapNote.objective}</div>
+        </div>
+        
+        <div class="section section-A">
+          <div class="section-header header-A">A: Assessment</div>
+          <div class="content">${soapNote.assessment}</div>
+        </div>
+        
+        <div class="section section-P">
+          <div class="section-header header-P">P: Plan</div>
+          <div class="content">${soapNote.plan}</div>
+        </div>
+        
+        <div class="footer">
+          This document is generated for professional clinical documentation and clinician review. 
+          Confidentiality applies under standard patient privacy rules.
+        </div>
+      </body>
+      </html>
+    `;
+
+    try {
+      if (Platform.OS === 'web') {
+        await Print.printAsync({ html: htmlContent });
+      } else {
+        const { uri } = await Print.printToFileAsync({ html: htmlContent });
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Download SOAP Note' });
+      }
+    } catch (e) {
+      console.error('Failed to export SOAP PDF:', e);
+      Alert.alert('Export Failed', 'Could not generate or download SOAP PDF.');
+    }
+  };
+
+
   const reset = () => {
     setStep(0);
     setResult(null);
+    setSoapNote(null);
+    setShowSoap(false);
     setSelectedBodyPart(null);
     setSymptoms([]);
     setSeverity('Moderate');
@@ -370,27 +562,29 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
     setMedications([]);
     setAllergies([]);
     setRecentChanges('');
+    setAge('');
+    setGender('Rather not say');
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
       {/* Header */}
-      <Surface style={[styles.header, { backgroundColor: isDark ? '#121214' : '#fff' }]} elevation={2}>
+      <Surface style={[styles.header, { backgroundColor: colors.surface, borderBottomWidth: 0.5, borderBottomColor: colors.border }]} elevation={0}>
         <View style={styles.headerRow}>
-          <View style={[styles.headerIcon, { backgroundColor: Colors.blue[600] }]}>
+          <View style={[styles.headerIcon, { backgroundColor: colors.primary }]}>
             <MaterialCommunityIcons name="stethoscope" size={18} color="#fff" />
           </View>
           <View>
-            <Text style={[styles.headerTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{t('symptomCheckerHeader')}</Text>
-            <Text style={{ fontSize: 11, color: isDark ? Colors.slate[500] : Colors.slate[400] }}>Web-matching clinic protocol</Text>
+            <AppText variant="title" style={{ fontWeight: '800' }}>{t('symptomCheckerHeader')}</AppText>
+            <AppText variant="micro" color={colors.textMuted}>Web-matching clinic protocol</AppText>
           </View>
         </View>
         {step < totalSteps && (
           <View style={styles.progressRow}>
-            <ProgressBar progress={(step + 1) / totalSteps} color={Colors.teal[600]} style={styles.progressBar} />
-            <Text style={{ fontSize: 10, color: isDark ? Colors.slate[500] : Colors.slate[400], marginTop: 4 }}>
+            <ProgressBar progress={(step + 1) / totalSteps} color={colors.primary} style={[styles.progressBar, { height: 6 }]} />
+            <AppText variant="micro" color={colors.textMuted} style={{ marginTop: 4 }}>
               Step {step + 1} of {totalSteps}
-            </Text>
+            </AppText>
           </View>
         )}
       </Surface>
@@ -411,32 +605,38 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
         {/* Step 0: Body Part Selector */}
         {step === 0 && (
           <Animated.View entering={FadeInDown.duration(400)} style={styles.stepContent}>
-            <View style={[styles.bannerContainer, { borderColor: isDark ? '#27272a' : '#e4e4e7' }]}>
-              <Image
-                source={require('../../../assets/images/symptoms_header.png')}
-                style={styles.bannerImage}
-                resizeMode="cover"
-              />
-            </View>
-            <Text style={[styles.stepTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{t('selectBodyPart')}</Text>
-            <Text style={[styles.stepDesc, { color: isDark ? Colors.slate[400] : Colors.slate[500] }]}>{t('selectBodyPartDesc')}</Text>
+            <GlassCard padded={false} style={{ marginBottom: 16, borderColor: colors.border }}>
+              <View style={{ padding: 18, flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: isDark ? 'rgba(99,102,241,0.08)' : '#f8fafc' }}>
+                <View style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: colors.primary + '18', justifyContent: 'center', alignItems: 'center' }}>
+                  <MaterialCommunityIcons name="stethoscope" size={24} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <AppText variant="body" style={{ fontWeight: '800' }}>Clinical Intake Protocol</AppText>
+                  <AppText variant="micro" color={colors.textMuted} style={{ marginTop: 2 }}>Secure AI assessment powered by Gemini</AppText>
+                </View>
+              </View>
+            </GlassCard>
+            <AppText variant="headline" style={{ marginBottom: 4 }}>{t('selectBodyPart')}</AppText>
+            <AppText variant="body" color={colors.textMuted} style={{ marginBottom: 16 }}>{t('selectBodyPartDesc')}</AppText>
             <View style={styles.grid}>
               {BODY_PARTS.map(part => (
-                <TouchableOpacity
-                  key={part.id}
-                  onPress={() => {
-                    setSelectedBodyPart(part.id);
-                    setStep(1);
-                  }}
-                  style={[styles.gridItem, { backgroundColor: isDark ? '#121214' : '#fff', borderColor: isDark ? '#27272a' : Colors.slate[200] }]}
-                >
-                  <View style={[styles.partIconBox, { backgroundColor: part.color + '15' }]}>
-                    <MaterialCommunityIcons name={part.icon as any} size={22} color={part.color} />
-                  </View>
-                  <Text style={[styles.partName, { color: isDark ? '#fff' : Colors.slate[800] }]} numberOfLines={1}>
-                    {part.name}
-                  </Text>
-                </TouchableOpacity>
+                <View key={part.id} style={{ width: '48%', marginBottom: 10 }}>
+                  <PressableScale
+                    onPress={() => {
+                      setSelectedBodyPart(part.id);
+                      setStep(1);
+                    }}
+                  >
+                    <GlassCard padded={false} style={[styles.gridItem, { width: '100%', backgroundColor: colors.surface, borderColor: colors.border }] as any}>
+                      <View style={[styles.partIconBox, { backgroundColor: part.color + '15' }]}>
+                        <MaterialCommunityIcons name={part.icon as any} size={22} color={part.color} />
+                      </View>
+                      <AppText variant="caption" style={{ fontWeight: '700', textAlign: 'center' }} numberOfLines={1}>
+                        {part.name}
+                      </AppText>
+                    </GlassCard>
+                  </PressableScale>
+                </View>
               ))}
             </View>
           </Animated.View>
@@ -445,16 +645,16 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
         {/* Step 1: Select Symptoms */}
         {step === 1 && selectedBodyPart && (
           <Animated.View entering={FadeInDown.duration(400)} style={styles.stepContent}>
-            <Text style={[styles.stepTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{t('selectSymptoms')}</Text>
-            <Text style={[styles.stepDesc, { color: isDark ? Colors.slate[400] : Colors.slate[500] }]}>{t('selectSymptomsDesc')} {BODY_PARTS.find(p => p.id === selectedBodyPart)?.name}</Text>
+            <AppText variant="headline" style={{ marginBottom: 4 }}>{t('selectSymptoms')}</AppText>
+            <AppText variant="body" color={colors.textMuted} style={{ marginBottom: 16 }}>{t('selectSymptomsDesc')} {BODY_PARTS.find(p => p.id === selectedBodyPart)?.name}</AppText>
             <View style={styles.chipsWrap}>
               {(SYMPTOMS_BY_BODY_PART[selectedBodyPart] || []).map(s => (
                 <Chip
                   key={s}
                   selected={symptoms.includes(s)}
                   onPress={() => toggleSymptom(s)}
-                  style={[styles.symptomChip, symptoms.includes(s) && { backgroundColor: Colors.teal[600] }]}
-                  textStyle={{ color: symptoms.includes(s) ? '#fff' : (isDark ? Colors.slate[300] : Colors.slate[600]), fontSize: 12 }}
+                  style={[styles.symptomChip, { borderColor: colors.border, borderWidth: 1 }, symptoms.includes(s) && { backgroundColor: colors.primary }]}
+                  textStyle={{ color: symptoms.includes(s) ? '#fff' : colors.text, fontSize: 12 }}
                   showSelectedCheck={false}
                 >
                   {s}
@@ -466,21 +666,23 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
                 value={customSymptom}
                 onChangeText={setCustomSymptom}
                 placeholder={t('typeSymptomPlaceholder')}
-                placeholderTextColor={isDark ? Colors.slate[600] : Colors.slate[400]}
-                style={[styles.customInput, { backgroundColor: isDark ? '#18181b' : '#f8fafc', color: isDark ? '#fff' : '#000' }]}
+                placeholderTextColor={colors.textMuted}
+                style={[styles.customInput, { backgroundColor: colors.surface, color: colors.text }]}
                 onSubmitEditing={addCustomSymptom}
                 mode="outlined"
-                outlineStyle={{ borderRadius: 12, borderColor: isDark ? Colors.slate[700] : Colors.slate[200] }}
+                outlineStyle={{ borderRadius: 12, borderColor: colors.border }}
+                activeOutlineColor={colors.primary}
+                textColor={colors.text}
                 dense
               />
-              <Button mode="contained" onPress={addCustomSymptom} style={styles.addBtn} compact>{t('add')}</Button>
+              <Button mode="contained" onPress={addCustomSymptom} style={[styles.addBtn, { backgroundColor: colors.primary }]} compact>{t('add')}</Button>
             </View>
             {symptoms.length > 0 && (
               <View style={styles.selectedWrap}>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.teal[600], marginBottom: 8 }}>Selected Symptoms ({symptoms.length}):</Text>
+                <AppText variant="caption" color={colors.primary} style={{ fontWeight: '700', marginBottom: 8 }}>Selected Symptoms ({symptoms.length}):</AppText>
                 <View style={styles.chipsWrap}>
                   {symptoms.map(s => (
-                    <Chip key={s} onClose={() => toggleSymptom(s)} style={{ backgroundColor: Colors.teal[50] }} textStyle={{ color: Colors.teal[700], fontSize: 11 }}>
+                    <Chip key={s} onClose={() => toggleSymptom(s)} style={{ backgroundColor: isDark ? colors.border : '#eef2ff' }} textStyle={{ color: colors.primary, fontSize: 11 }}>
                       {s}
                     </Chip>
                   ))}
@@ -493,34 +695,41 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
         {/* Step 2: Severity & Duration */}
         {step === 2 && (
           <Animated.View entering={FadeInDown.duration(400)} style={styles.stepContent}>
-            <Text style={[styles.stepTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{t('severityDuration')}</Text>
-            <Text style={[styles.sectionLabel, { color: isDark ? Colors.slate[300] : Colors.slate[600] }]}>{t('selectSeverity')}</Text>
+            <AppText variant="headline" style={{ marginBottom: 4 }}>{t('severityDuration')}</AppText>
+            <AppText variant="body" color={colors.textMuted} style={{ marginBottom: 16 }}>{t('severityDurationDesc') || 'Configure severity and timeline metrics'}</AppText>
+            
+            <AppText variant="title" style={{ marginBottom: 10, fontWeight: '800' }}>{t('selectSeverity')}</AppText>
             <View style={{ gap: 10, marginBottom: 20 }}>
               {SEVERITY_LEVELS.map(item => (
                 <TouchableOpacity
                   key={item.value}
                   onPress={() => setSeverity(item.value)}
-                  style={[
-                    styles.severityCard,
-                    { backgroundColor: isDark ? '#121214' : '#fff', borderColor: severity === item.value ? item.color : (isDark ? '#27272a' : Colors.slate[200]) },
-                    severity === item.value && { borderWidth: 2 },
-                  ]}
+                  activeOpacity={0.85}
                 >
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={{ fontSize: 14, fontWeight: '800', color: item.color }}>{item.value}</Text>
-                    {severity === item.value && <MaterialCommunityIcons name="check-circle" size={16} color={item.color} />}
-                  </View>
-                  <Text style={{ fontSize: 11, color: isDark ? Colors.slate[400] : Colors.slate[500], marginTop: 2 }}>{item.desc}</Text>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
-                    {item.examples.map((ex, j) => (
-                      <Chip key={j} style={{ backgroundColor: isDark ? '#18181b' : Colors.slate[50] }} textStyle={{ fontSize: 9, color: isDark ? Colors.slate[300] : Colors.slate[600] }}>{ex}</Chip>
-                    ))}
-                  </View>
+                  <GlassCard
+                    padded={false}
+                    style={[
+                      styles.severityCard,
+                      { padding: 14, backgroundColor: colors.surface, borderColor: severity === item.value ? item.color : colors.border },
+                      severity === item.value && { borderWidth: 2 },
+                    ] as any}
+                  >
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <AppText variant="body" style={{ fontWeight: '800', color: item.color }}>{item.value}</AppText>
+                      {severity === item.value && <MaterialCommunityIcons name="check-circle" size={16} color={item.color} />}
+                    </View>
+                    <AppText variant="caption" color={colors.textMuted} style={{ marginTop: 2 }}>{item.desc}</AppText>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                      {item.examples.map((ex, j) => (
+                        <Chip key={j} style={{ backgroundColor: isDark ? colors.border : Colors.slate[50] }} textStyle={{ fontSize: 9, color: colors.text }}>{ex}</Chip>
+                      ))}
+                    </View>
+                  </GlassCard>
                 </TouchableOpacity>
               ))}
             </View>
 
-            <Text style={[styles.sectionLabel, { color: isDark ? Colors.slate[300] : Colors.slate[600] }]}>{t('selectDuration')}</Text>
+            <AppText variant="title" style={{ marginBottom: 10, fontWeight: '800' }}>{t('selectDuration')}</AppText>
             <View style={styles.optionsWrap}>
               {DURATION_OPTIONS.map(d => (
                 <TouchableOpacity
@@ -529,14 +738,77 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
                   style={[
                     styles.optionCard,
                     {
-                      backgroundColor: duration === d ? Colors.teal[600] : (isDark ? '#18181b' : '#f8fafc'),
-                      borderColor: duration === d ? Colors.teal[600] : (isDark ? Colors.slate[700] : Colors.slate[200]),
+                      backgroundColor: duration === d ? colors.primary : colors.surface,
+                      borderColor: duration === d ? colors.primary : colors.border,
                     },
                   ]}
                 >
-                  <Text style={{ color: duration === d ? '#fff' : (isDark ? Colors.slate[300] : Colors.slate[600]), fontSize: 12, fontWeight: '600' }}>{d}</Text>
+                  <AppText variant="caption" color={duration === d ? '#fff' : colors.text} style={{ fontWeight: '600' }}>{d}</AppText>
                 </TouchableOpacity>
               ))}
+            </View>
+
+            <AppText variant="title" style={{ marginTop: 24, marginBottom: 8, fontWeight: '800' }}>Patient Identity & Details</AppText>
+            <TextInput
+              value={patientName}
+              onChangeText={setPatientName}
+              placeholder="Patient Full Name"
+              style={{ backgroundColor: colors.surface, height: 44, marginBottom: 10 }}
+              textColor={colors.text}
+              mode="outlined"
+              outlineStyle={{ borderRadius: 12, borderColor: colors.border }}
+              activeOutlineColor={colors.primary}
+              dense
+            />
+            <TextInput
+              value={patientAddress}
+              onChangeText={setPatientAddress}
+              placeholder="Patient Location / Village / Address"
+              style={{ backgroundColor: colors.surface, height: 44, marginBottom: 14 }}
+              textColor={colors.text}
+              mode="outlined"
+              outlineStyle={{ borderRadius: 12, borderColor: colors.border }}
+              activeOutlineColor={colors.primary}
+              right={
+                <TextInput.Icon 
+                  icon={detectingLocation ? "loading" : "map-marker-radius"} 
+                  color={colors.primary}
+                  onPress={handleDetectLocation}
+                  disabled={detectingLocation}
+                />
+              }
+              dense
+            />
+
+            <AppText variant="title" style={{ marginBottom: 8, fontWeight: '800' }}>Age & Gender</AppText>
+            <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+              <TextInput
+                value={age}
+                onChangeText={setAge}
+                placeholder="Age"
+                keyboardType="numeric"
+                style={{ flex: 1, backgroundColor: colors.surface, height: 44 }}
+                textColor={colors.text}
+                mode="outlined"
+                outlineStyle={{ borderRadius: 12, borderColor: colors.border }}
+                activeOutlineColor={colors.primary}
+                dense
+              />
+              <View style={{ flex: 2, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                {['Male', 'Female', 'Other'].map(g => (
+                  <Chip
+                    key={g}
+                    selected={gender === g}
+                    onPress={() => setGender(g)}
+                    style={{ backgroundColor: gender === g ? (isDark ? colors.border : '#eef2ff') : colors.surface, borderColor: gender === g ? colors.primary : colors.border, borderWidth: 1 }}
+                    selectedColor={colors.primary}
+                    textStyle={{ fontSize: 11, color: gender === g ? colors.primary : colors.text }}
+                    showSelectedOverlay
+                  >
+                    {g}
+                  </Chip>
+                ))}
+              </View>
             </View>
           </Animated.View>
         )}
@@ -544,32 +816,34 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
         {/* Step 3: Medical History */}
         {step === 3 && (
           <Animated.View entering={FadeInDown.duration(400)} style={styles.stepContent}>
-            <Text style={[styles.stepTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{t('medicalHistory')}</Text>
-            <Text style={[styles.stepDesc, { color: isDark ? Colors.slate[400] : Colors.slate[500] }]}>{t('medicalHistoryDesc')}</Text>
+            <AppText variant="headline" style={{ marginBottom: 4 }}>{t('medicalHistory')}</AppText>
+            <AppText variant="body" color={colors.textMuted} style={{ marginBottom: 16 }}>{t('medicalHistoryDesc')}</AppText>
             {[
               { label: t('existingConditions'), arr: conditions, setter: setConditions, placeholder: t('conditionsPlaceholder') },
               { label: t('currentMedications'), arr: medications, setter: setMedications, placeholder: t('medicationsPlaceholder') },
               { label: t('allergies'), arr: allergies, setter: setAllergies, placeholder: t('allergiesPlaceholder') },
             ].map(({ label, arr, setter, placeholder }) => (
               <View key={label} style={styles.historySection}>
-                <Text style={[styles.sectionLabel, { color: isDark ? Colors.slate[300] : Colors.slate[600] }]}>{label}</Text>
+                <AppText variant="caption" color={colors.text} style={{ fontWeight: '800', marginBottom: 10 }}>{label}</AppText>
                 <View style={styles.customInputRow}>
                   <TextInput
                     value={tempInput}
                     onChangeText={setTempInput}
                     placeholder={placeholder}
-                    placeholderTextColor={isDark ? Colors.slate[600] : Colors.slate[400]}
-                    style={[styles.customInput, { backgroundColor: isDark ? '#18181b' : '#f8fafc', color: isDark ? '#fff' : '#000' }]}
+                    placeholderTextColor={colors.textMuted}
+                    style={[styles.customInput, { backgroundColor: colors.surface, color: colors.text }]}
                     onSubmitEditing={() => addTag(setter, arr)}
                     mode="outlined"
-                    outlineStyle={{ borderRadius: 12, borderColor: isDark ? Colors.slate[700] : Colors.slate[200] }}
+                    outlineStyle={{ borderRadius: 12, borderColor: colors.border }}
+                    activeOutlineColor={colors.primary}
+                    textColor={colors.text}
                     dense
                   />
-                  <Button mode="contained" onPress={() => addTag(setter, arr)} style={styles.addBtn} compact>{t('add')}</Button>
+                  <Button mode="contained" onPress={() => addTag(setter, arr)} style={[styles.addBtn, { backgroundColor: colors.primary }]} compact>{t('add')}</Button>
                 </View>
                 <View style={styles.chipsWrap}>
                   {arr.map(item => (
-                    <Chip key={item} onClose={() => setter(arr.filter(x => x !== item))} style={{ backgroundColor: isDark ? '#27272a' : Colors.emerald[50] }} textStyle={{ color: isDark ? Colors.emerald[300] : Colors.emerald[700], fontSize: 11 }}>
+                    <Chip key={item} onClose={() => setter(arr.filter(x => x !== item))} style={{ backgroundColor: isDark ? colors.border : Colors.emerald[50] }} textStyle={{ color: isDark ? Colors.emerald[300] : Colors.emerald[700], fontSize: 11 }}>
                       {item}
                     </Chip>
                   ))}
@@ -582,7 +856,7 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
         {/* Step 4: Lifestyle Factors */}
         {step === 4 && (
           <Animated.View entering={FadeInDown.duration(400)} style={styles.stepContent}>
-            <Text style={[styles.stepTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{t('lifestyleFactors')}</Text>
+            <AppText variant="headline" style={{ marginBottom: 16 }}>{t('lifestyleFactors')}</AppText>
             {[
               { label: t('exerciseLevel'), key: 'exercise', options: ['None', 'Light', 'Moderate', 'Heavy'] },
               { label: t('stressLevel'), key: 'stress', options: ['Low', 'Moderate', 'High', 'Very High'] },
@@ -590,7 +864,7 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
               { label: t('alcoholIntake'), key: 'alcohol', options: ['None', 'Occasionally', 'Regularly', 'Daily'] },
             ].map(({ label, key, options }) => (
               <View key={key} style={{ marginBottom: 14 }}>
-                <Text style={[styles.sectionLabel, { color: isDark ? Colors.slate[300] : Colors.slate[600] }]}>{label}</Text>
+                <AppText variant="caption" color={colors.text} style={{ fontWeight: '800', marginBottom: 10 }}>{label}</AppText>
                 <View style={styles.optionsWrap}>
                   {options.map(opt => (
                     <TouchableOpacity
@@ -599,12 +873,12 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
                       style={[
                         styles.optionCardSmall,
                         {
-                          backgroundColor: (lifestyle as any)[key] === opt ? Colors.teal[600] : (isDark ? '#18181b' : '#f8fafc'),
-                          borderColor: (lifestyle as any)[key] === opt ? Colors.teal[600] : (isDark ? Colors.slate[700] : Colors.slate[200]),
+                          backgroundColor: (lifestyle as any)[key] === opt ? colors.primary : colors.surface,
+                          borderColor: (lifestyle as any)[key] === opt ? colors.primary : colors.border,
                         },
                       ]}
                     >
-                      <Text style={{ color: (lifestyle as any)[key] === opt ? '#fff' : (isDark ? Colors.slate[300] : Colors.slate[600]), fontSize: 11, fontWeight: '700' }}>{opt}</Text>
+                      <AppText variant="micro" color={(lifestyle as any)[key] === opt ? '#fff' : colors.text} style={{ fontWeight: '700' }}>{opt}</AppText>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -612,11 +886,11 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
             ))}
             <TouchableOpacity
               onPress={() => setLifestyle(prev => ({ ...prev, smoking: !prev.smoking }))}
-              style={[styles.toggleRow, { backgroundColor: isDark ? '#18181b' : '#f8fafc', borderColor: isDark ? '#27272a' : Colors.slate[200] }]}
+              style={[styles.toggleRow, { backgroundColor: colors.surface, borderColor: colors.border }]}
             >
-              <Text style={{ color: isDark ? Colors.slate[300] : Colors.slate[600], fontSize: 13, fontWeight: '700' }}>{t('smokingUse')}</Text>
-              <View style={[styles.toggleDot, { backgroundColor: lifestyle.smoking ? Colors.rose[500] : Colors.emerald[500] }]}>
-                <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>{lifestyle.smoking ? 'YES' : 'NO'}</Text>
+              <AppText variant="caption" style={{ fontWeight: '700' }}>{t('smokingUse')}</AppText>
+              <View style={[styles.toggleDot, { backgroundColor: lifestyle.smoking ? colors.danger : colors.success }]}>
+                <AppText variant="micro" color="#fff" style={{ fontWeight: '800' }}>{lifestyle.smoking ? 'YES' : 'NO'}</AppText>
               </View>
             </TouchableOpacity>
           </Animated.View>
@@ -625,18 +899,20 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
         {/* Step 5: Recent Changes / Additional Info */}
         {step === 5 && (
           <Animated.View entering={FadeInDown.duration(400)} style={styles.stepContent}>
-            <Text style={[styles.stepTitle, { color: isDark ? '#fff' : Colors.slate[800] }]}>{t('additionalContext')}</Text>
-            <Text style={[styles.stepDesc, { color: isDark ? Colors.slate[400] : Colors.slate[500] }]}>{t('additionalContextDesc')}</Text>
+            <AppText variant="headline" style={{ marginBottom: 4 }}>{t('additionalContext')}</AppText>
+            <AppText variant="body" color={colors.textMuted} style={{ marginBottom: 16 }}>{t('additionalContextDesc')}</AppText>
             <TextInput
               value={recentChanges}
               onChangeText={setRecentChanges}
               placeholder={t('contextPlaceholder')}
-              placeholderTextColor={isDark ? Colors.slate[600] : Colors.slate[400]}
+              placeholderTextColor={colors.textMuted}
               multiline
               numberOfLines={6}
               mode="outlined"
-              outlineStyle={{ borderRadius: 16, borderColor: isDark ? Colors.slate[700] : Colors.slate[200] }}
-              style={[styles.textArea, { backgroundColor: isDark ? '#121214' : '#fff', color: isDark ? '#fff' : '#000' }]}
+              outlineStyle={{ borderRadius: 16, borderColor: colors.border }}
+              activeOutlineColor={colors.primary}
+              textColor={colors.text}
+              style={[styles.textArea, { backgroundColor: colors.surface, color: colors.text }]}
             />
           </Animated.View>
         )}
@@ -650,6 +926,64 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
               <View style={{ flexDirection: 'row', gap: 6 }}>
                 <Button mode="outlined" onPress={handleDownloadPDF} icon="file-pdf-box" compact style={{ borderRadius: 16 }}>PDF</Button>
                 <Button mode="outlined" onPress={handleShareReport} icon="share-variant" compact style={{ borderRadius: 16 }}>Share</Button>
+              </View>
+            </View>
+
+            {/* ── Insufficient Information Banner (Healix: "I don't know over guessing") ── */}
+            {result.insufficientInformation && (
+              <Surface style={[styles.insufficientBanner, { backgroundColor: isDark ? '#431407' : '#fff7ed' }]} elevation={0}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <MaterialCommunityIcons name="brain" size={20} color={Colors.amber[600]} />
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: Colors.amber[700] }}>Insufficient Information</Text>
+                </View>
+                <Text style={{ fontSize: 12, color: isDark ? Colors.amber[300] : Colors.amber[800], lineHeight: 18 }}>
+                  The AI confidence was too low to generate a reliable diagnosis. This is by design —{' '}
+                  <Text style={{ fontWeight: '700' }}>"I don't know over guessing"</Text> principle protects you from incorrect assessments.
+                </Text>
+                <Text style={{ fontSize: 12, color: isDark ? Colors.amber[300] : Colors.amber[800], marginTop: 8, fontWeight: '600' }}>
+                  👨‍⚕️ Please consult a doctor in person for an accurate diagnosis.
+                </Text>
+              </Surface>
+            )}
+
+            {/* ── ESI Triage Score + AI Confidence Row ── */}
+            <View style={styles.esiBadgeRow}>
+              <View style={[styles.esiBadge, {
+                backgroundColor:
+                  result.esiScore <= 2 ? Colors.rose[600] :
+                  result.esiScore === 3 ? Colors.amber[500] :
+                  Colors.emerald[600],
+              }]}>
+                <Text style={{ fontSize: 9, color: '#fff', fontWeight: '800', opacity: 0.85 }}>ESI SCORE</Text>
+                <Text style={{ fontSize: 22, color: '#fff', fontWeight: '900', lineHeight: 26 }}>{result.esiScore}</Text>
+                <Text style={{ fontSize: 8, color: '#fff', fontWeight: '600', opacity: 0.85 }}>
+                  {result.esiScore === 1 ? 'RESUSCITATE' :
+                   result.esiScore === 2 ? 'EMERGENCY' :
+                   result.esiScore === 3 ? 'URGENT' :
+                   result.esiScore === 4 ? 'LESS URGENT' : 'ROUTINE'}
+                </Text>
+              </View>
+              <View style={[styles.confidenceCard, { backgroundColor: isDark ? '#18181b' : Colors.slate[50], flex: 1 }]}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: isDark ? Colors.slate[400] : Colors.slate[500] }}>AI Confidence</Text>
+                  <Text style={{
+                    fontSize: 13, fontWeight: '800',
+                    color: result.selfReportedConfidence >= 80 ? Colors.emerald[600] :
+                           result.selfReportedConfidence >= 70 ? Colors.amber[600] :
+                           Colors.rose[600],
+                  }}>{result.selfReportedConfidence}%</Text>
+                </View>
+                <View style={[styles.confidenceBar, { backgroundColor: isDark ? '#27272a' : Colors.slate[200] }]}>
+                  <View style={[styles.confidenceFill, {
+                    width: `${result.selfReportedConfidence}%` as any,
+                    backgroundColor: result.selfReportedConfidence >= 80 ? Colors.emerald[500] :
+                                     result.selfReportedConfidence >= 70 ? Colors.amber[500] :
+                                     Colors.rose[500],
+                  }]} />
+                </View>
+                <Text style={{ fontSize: 9, color: isDark ? Colors.slate[500] : Colors.slate[400], marginTop: 4 }}>
+                  T=0.0 deterministic · Threshold: 70%
+                </Text>
               </View>
             </View>
 
@@ -729,6 +1063,56 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
               </>
             )}
 
+            {/* ── 360° Recovery Roadmap (ESI 4–5 only — Healix AI concept) ── */}
+            {result.recoveryRoadmap && (
+              <Animated.View entering={FadeInDown.duration(500)}>
+                <Text style={[styles.resultSection, { color: isDark ? '#fff' : Colors.slate[800] }]}>🗺 360° Recovery Roadmap</Text>
+                <Surface style={[styles.roadmapCard, { backgroundColor: isDark ? '#0c1a14' : '#f0fdf4' }]} elevation={0}>
+                  {result.recoveryRoadmap.precautions.length > 0 && (
+                    <View style={styles.roadmapSection}>
+                      <View style={styles.roadmapSectionHeader}>
+                        <MaterialCommunityIcons name="shield-check" size={16} color={Colors.emerald[600]} />
+                        <Text style={[styles.roadmapSectionTitle, { color: isDark ? Colors.emerald[300] : Colors.emerald[700] }]}>Precautions</Text>
+                      </View>
+                      {result.recoveryRoadmap.precautions.map((p, i) => (
+                        <Text key={i} style={[styles.roadmapItem, { color: isDark ? Colors.slate[300] : Colors.slate[700] }]}>• {p}</Text>
+                      ))}
+                    </View>
+                  )}
+                  {result.recoveryRoadmap.dietaryGuidelines.length > 0 && (
+                    <View style={styles.roadmapSection}>
+                      <View style={styles.roadmapSectionHeader}>
+                        <MaterialCommunityIcons name="food-apple" size={16} color={Colors.teal[600]} />
+                        <Text style={[styles.roadmapSectionTitle, { color: isDark ? Colors.teal[300] : Colors.teal[700] }]}>Dietary Guidelines</Text>
+                      </View>
+                      {result.recoveryRoadmap.dietaryGuidelines.map((d, i) => (
+                        <Text key={i} style={[styles.roadmapItem, { color: isDark ? Colors.slate[300] : Colors.slate[700] }]}>• {d}</Text>
+                      ))}
+                    </View>
+                  )}
+                  {!!result.recoveryRoadmap.followUpTiming && (
+                    <View style={styles.roadmapSection}>
+                      <View style={styles.roadmapSectionHeader}>
+                        <MaterialCommunityIcons name="calendar-clock" size={16} color={Colors.blue[600]} />
+                        <Text style={[styles.roadmapSectionTitle, { color: isDark ? Colors.blue[300] : Colors.blue[700] }]}>Follow-Up Timing</Text>
+                      </View>
+                      <Text style={[styles.roadmapItem, { color: isDark ? Colors.slate[300] : Colors.slate[700] }]}>{result.recoveryRoadmap.followUpTiming}</Text>
+                    </View>
+                  )}
+                  {!!result.recoveryRoadmap.generalCategoryGuidance && (
+                    <View style={[styles.roadmapSection, { backgroundColor: isDark ? '#162032' : '#eff6ff', borderRadius: 10, padding: 10 }]}>
+                      <Text style={{ fontSize: 10, fontWeight: '800', color: Colors.blue[600], marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>General Care Guidance</Text>
+                      <Text style={{ fontSize: 12, color: isDark ? Colors.slate[300] : Colors.slate[700], lineHeight: 18 }}>{result.recoveryRoadmap.generalCategoryGuidance}</Text>
+                    </View>
+                  )}
+                  <View style={[styles.roadmapDisclaimer, { backgroundColor: isDark ? '#27272a' : Colors.slate[100] }]}>
+                    <MaterialCommunityIcons name="pill" size={12} color={isDark ? Colors.slate[400] : Colors.slate[500]} />
+                    <Text style={{ fontSize: 10, color: isDark ? Colors.slate[400] : Colors.slate[500], flex: 1, lineHeight: 14 }}>{result.recoveryRoadmap.medicationDisclaimer}</Text>
+                  </View>
+                </Surface>
+              </Animated.View>
+            )}
+
             {/* Red Flags */}
             {result.redFlags.length > 0 && (
               <Surface style={[styles.redFlagCard, { backgroundColor: isDark ? '#450a0a80' : '#fef2f2' }]} elevation={0}>
@@ -739,12 +1123,78 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
               </Surface>
             )}
 
-            {/* Disclaimer */}
             {SHOW_DISCLAIMERS && (
               <Surface style={[styles.disclaimerBox, { backgroundColor: isDark ? '#18181b' : Colors.slate[50] }]} elevation={0}>
                 <Text style={{ fontSize: 10, color: isDark ? Colors.slate[500] : Colors.slate[500], lineHeight: 14 }}>{result.disclaimer}</Text>
               </Surface>
             )}
+
+            {/* ── SOAP Note Generator (Healix AI SOAP Scribe concept) ── */}
+            <View style={[styles.soapGeneratorCard, { backgroundColor: isDark ? '#0f172a' : '#f0f9ff', borderColor: isDark ? '#1e3a5f' : Colors.blue[100] }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <View style={[styles.soapIconBox, { backgroundColor: Colors.blue[600] }]}>
+                  <MaterialCommunityIcons name="file-document-edit" size={16} color="#fff" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 14, fontWeight: '800', color: isDark ? '#fff' : Colors.slate[800] }}>SOAP Note Generator</Text>
+                  <Text style={{ fontSize: 10, color: isDark ? Colors.slate[400] : Colors.slate[500] }}>Clinical documentation · T=0.0 deterministic</Text>
+                </View>
+              </View>
+              <Text style={{ fontSize: 12, color: isDark ? Colors.slate[400] : Colors.slate[600], lineHeight: 17, marginBottom: 12 }}>
+                Generate a structured S.O.A.P. clinical note from this analysis — standard medical documentation format.
+              </Text>
+              <Button
+                mode="contained"
+                onPress={handleGenerateSOAP}
+                loading={soapLoading}
+                disabled={soapLoading}
+                icon="clipboard-pulse"
+                style={{ borderRadius: 20, backgroundColor: Colors.blue[600] }}
+                labelStyle={{ fontSize: 13, fontWeight: '700' }}
+              >
+                {showSoap && soapNote ? 'Regenerate SOAP Note' : 'Generate SOAP Note'}
+              </Button>
+
+              {showSoap && soapLoading && (
+                <View style={{ alignItems: 'center', paddingVertical: 20, gap: 8 }}>
+                  <ActivityIndicator size="small" color={Colors.blue[600]} />
+                  <Text style={{ fontSize: 12, color: Colors.blue[600], fontWeight: '600' }}>Generating clinical SOAP note (T=0.0)…</Text>
+                </View>
+              )}
+
+              {showSoap && soapNote && !soapLoading && (
+                <Animated.View entering={FadeInDown.duration(400)} style={[styles.soapNotePanel, { backgroundColor: isDark ? '#070f1a' : '#fff', borderColor: isDark ? '#1e3a5f' : Colors.blue[100] }]}>
+                  <View style={[styles.soapSectionBlock, { borderLeftColor: Colors.blue[500] }]}>
+                    <Text style={[styles.soapSectionLabel, { color: Colors.blue[600] }]}>S — Subjective</Text>
+                    <Text style={[styles.soapSectionText, { color: isDark ? Colors.slate[300] : Colors.slate[700] }]}>{soapNote.subjective}</Text>
+                  </View>
+                  <View style={[styles.soapSectionBlock, { borderLeftColor: Colors.emerald[500] }]}>
+                    <Text style={[styles.soapSectionLabel, { color: Colors.emerald[600] }]}>O — Objective</Text>
+                    <Text style={[styles.soapSectionText, { color: isDark ? Colors.slate[300] : Colors.slate[700] }]}>{soapNote.objective}</Text>
+                  </View>
+                  <View style={[styles.soapSectionBlock, { borderLeftColor: Colors.amber[500] }]}>
+                    <Text style={[styles.soapSectionLabel, { color: Colors.amber[600] }]}>A — Assessment</Text>
+                    <Text style={[styles.soapSectionText, { color: isDark ? Colors.slate[300] : Colors.slate[700] }]}>{soapNote.assessment}</Text>
+                  </View>
+                  <View style={[styles.soapSectionBlock, { borderLeftColor: '#7c3aed' }]}>
+                    <Text style={[styles.soapSectionLabel, { color: '#7c3aed' }]}>P — Plan</Text>
+                    <Text style={[styles.soapSectionText, { color: isDark ? Colors.slate[300] : Colors.slate[700] }]}>{soapNote.plan}</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, borderTopWidth: 1, borderTopColor: isDark ? '#1e293b' : '#f1f5f9', paddingTop: 10 }}>
+                    <TouchableOpacity
+                      onPress={handleDownloadSOAP}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.blue[600], paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8 }}
+                    >
+                      <MaterialCommunityIcons name="download" size={14} color="#fff" />
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#fff' }}>Export PDF</Text>
+                    </TouchableOpacity>
+                    <Text style={{ fontSize: 9, color: isDark ? Colors.slate[600] : Colors.slate[400] }}>
+                      Generated {new Date(soapNote.generatedAt).toLocaleTimeString()} · SOAP Scribe
+                    </Text>
+                  </View>
+                </Animated.View>
+              )}
+            </View>
 
             <Button mode="contained" onPress={reset} style={{ marginTop: 20, borderRadius: 28, backgroundColor: Colors.teal[600] }} icon="refresh">
               {t('newAnalysisBtn')}
@@ -752,46 +1202,52 @@ ${result.remedyRecommendations.map(r => `- [${r.type}]: ${r.recommendation}`).jo
           </Animated.View>
         )}
 
+
         <View style={{ height: 40 }} />
       </ScrollView>
 
       {/* Navigation footer */}
       {step < totalSteps && !loading && (
-        <Surface style={[styles.navBar, { backgroundColor: isDark ? '#121214' : '#fff' }]} elevation={4}>
-          <Button mode="outlined" onPress={() => setStep(Math.max(0, step - 1))} disabled={step === 0}
-            style={[styles.navBtn, { borderColor: isDark ? Colors.slate[700] : Colors.slate[300] }]} labelStyle={{ fontSize: 13 }}>
+        <Surface style={[styles.navBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]} elevation={4}>
+          <Button 
+            mode="outlined" 
+            onPress={() => setStep(Math.max(0, step - 1))} 
+            disabled={step === 0}
+            style={[styles.navBtn, { borderColor: colors.border, borderRadius: 24 }]} 
+            labelStyle={{ fontSize: 13, color: colors.text }}
+          >
             {t('back')}
           </Button>
-          {step < totalSteps - 1 ? (
-            <Button
-              mode="contained"
-              onPress={() => {
-                if (step === 1 && symptoms.length === 0) {
-                  Alert.alert('Required', 'Please select at least one symptom.');
-                  return;
-                }
-                setStep(step + 1);
-              }}
-              style={[styles.navBtn, { backgroundColor: Colors.teal[600] }]}
-              labelStyle={{ fontSize: 13 }}
-              icon="arrow-right"
-            >
-              {t('next')}
-            </Button>
-          ) : (
-            <Button mode="contained" onPress={handleAnalyze} loading={loading}
-              style={[styles.navBtn, { backgroundColor: Colors.teal[600] }]} labelStyle={{ fontSize: 13 }} icon="brain">
-              {t('analyzeBtn')}
-            </Button>
-          )}
+          <View style={{ width: 12 }} />
+          <View style={{ flex: 1.5 }}>
+            {step < totalSteps - 1 ? (
+              <GradientButton
+                label={t('next')}
+                onPress={() => {
+                  if (step === 1 && symptoms.length === 0) {
+                    Alert.alert('Required', 'Please select at least one symptom.');
+                    return;
+                  }
+                  setStep(step + 1);
+                }}
+                icon="arrow-right"
+              />
+            ) : (
+              <GradientButton 
+                label={t('analyzeBtn')} 
+                onPress={handleAnalyze} 
+                icon="brain"
+              />
+            )}
+          </View>
         </Surface>
       )}
 
       {loading && (
-        <Surface style={[styles.navBar, { backgroundColor: isDark ? '#121214' : '#fff', justifyContent: 'center' }]} elevation={4}>
+        <Surface style={[styles.navBar, { backgroundColor: colors.surface, borderTopColor: colors.border, justifyContent: 'center' }]} elevation={4}>
           <View style={{ alignItems: 'center', paddingVertical: 8, flexDirection: 'row', gap: 10 }}>
-            <ActivityIndicator size="small" color={Colors.teal[600]} />
-            <Text style={{ fontSize: 13, color: Colors.teal[600], fontWeight: '600' }}>{t('geminiRunning')}</Text>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <AppText variant="body" color={colors.primary} style={{ fontWeight: '600' }}>{t('geminiRunning')}</AppText>
           </View>
         </Surface>
       )}
@@ -854,4 +1310,26 @@ const styles = StyleSheet.create({
   warningRow: { flexDirection: 'row', gap: 6, marginTop: 8, alignItems: 'flex-start' },
   redFlagCard: { borderRadius: 14, padding: 14, marginTop: 16 },
   disclaimerBox: { borderRadius: 12, padding: 12, marginTop: 16 },
+  // ── Insufficient information override banner ──
+  insufficientBanner: { borderRadius: 14, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: '#f59e0b40' },
+  // ── ESI Badge + AI Confidence row ──
+  esiBadgeRow: { flexDirection: 'row', gap: 10, marginBottom: 16, alignItems: 'stretch' },
+  esiBadge: { borderRadius: 14, padding: 12, alignItems: 'center', justifyContent: 'center', minWidth: 82 },
+  confidenceCard: { borderRadius: 14, padding: 12 },
+  confidenceBar: { height: 6, borderRadius: 3, overflow: 'hidden' },
+  confidenceFill: { height: 6, borderRadius: 3 },
+  // ── 360° Recovery Roadmap ──
+  roadmapCard: { borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#6ee7b730' },
+  roadmapSection: { marginBottom: 12 },
+  roadmapSectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  roadmapSectionTitle: { fontSize: 12, fontWeight: '800' },
+  roadmapItem: { fontSize: 12, lineHeight: 18, marginLeft: 4 },
+  roadmapDisclaimer: { flexDirection: 'row', gap: 6, padding: 8, borderRadius: 8, marginTop: 8, alignItems: 'flex-start' },
+  // ── SOAP Note Generator ──
+  soapGeneratorCard: { borderRadius: 18, padding: 16, marginTop: 20, borderWidth: 1 },
+  soapIconBox: { width: 32, height: 32, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  soapNotePanel: { marginTop: 16, borderRadius: 14, padding: 14, borderWidth: 1 },
+  soapSectionBlock: { borderLeftWidth: 3, paddingLeft: 10, marginBottom: 14 },
+  soapSectionLabel: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 },
+  soapSectionText: { fontSize: 12, lineHeight: 18 },
 });

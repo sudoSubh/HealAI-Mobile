@@ -30,7 +30,9 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
+# local env files — real secrets must NEVER be committed
+.env
+.env.local
 .env*.local
 
 # typescript

@@ -26,7 +26,7 @@ interface Message {
 const INITIAL_MESSAGE: Message = {
   id: 'initial',
   type: 'bot',
-  content: "Hello! I'm your medical assistant powered by Google's Gemini AI. How can I help you with your health questions today?",
+  content: "Hello! I'm your HealAI medical assistant. How can I help you with your health questions today?",
   timestamp: new Date(),
 };
 
